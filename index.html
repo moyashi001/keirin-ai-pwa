@@ -30,7 +30,10 @@
             結果ページのHTMLは「回収率」タブに貼り付けてください。
           </p>
           <textarea id="html-input" class="html-textarea" rows="8" placeholder="ここに出走表HTMLを貼り付けてください"></textarea>
-          <button id="parse-html-btn" class="primary-btn">解析する</button>
+          <div class="button-row">
+            <button id="parse-html-btn" class="primary-btn">解析する</button>
+            <button id="clear-html-btn" class="secondary-btn">クリア</button>
+          </div>
           <p id="upload-status" class="status-msg"></p>
         </div>
       </section>
@@ -71,7 +74,10 @@
             保存済みの予想と突き合わせて回収率を計算し、選手データを更新します。
           </p>
           <textarea id="result-html-input" class="html-textarea" rows="8" placeholder="ここに結果HTMLを貼り付けてください"></textarea>
-          <button id="parse-result-btn" class="primary-btn">結果を集計する</button>
+          <div class="button-row">
+            <button id="parse-result-btn" class="primary-btn">結果を集計する</button>
+            <button id="clear-result-btn" class="secondary-btn">クリア</button>
+          </div>
           <p id="result-status" class="status-msg"></p>
         </div>
         <div class="panel">

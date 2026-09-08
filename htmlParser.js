@@ -792,7 +792,81 @@ function buildResultsFromPcData(data, fullText, referenceDate = new Date()) {
  * レース番号はテーブル直前の見出しテキストから推定する(推定できない場合は出現順の通し番号)。
  * @returns {Array<{raceKey:string, date:string, venue:string, raceNumber:number, order:object[]}>}
  */
+/**
+ * GambooBET(kdreams.jp)の「払戻金一覧」ページ専用の抽出ロジック。
+ * KEIRIN.JP系のページと異なり、1ページに開催中の全競輪場・全レース分の
+ * 3連単着順と払戻金がまとまっている(選手名は無く車番のみ)。
+ * 選手名が無い分は、updateRidersFromResults(app.js)側で同日の出走表データから
+ * 車番をキーに補完するため、ここでは name: null のまま返す。
+ */
+function looksLikeGambooRefundListPage(html) {
+  return /daily_refund_result_table/.test(html) && /class="velodrome"/.test(html);
+}
+
+function parseGambooRefundListPage(html, referenceDate = new Date()) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const fullText = normalizeText(doc.body ? doc.body.textContent : html);
+
+  let dateLabel;
+  const dateMatch = fullText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (dateMatch) {
+    dateLabel = `${dateMatch[1]}-${pad2(dateMatch[2])}-${pad2(dateMatch[3])}`;
+  } else {
+    dateLabel = detectDateLabel(fullText, referenceDate);
+  }
+
+  const results = [];
+  const venueBlocks = Array.from(doc.querySelectorAll('.daily_refund_result_list > dl'));
+  for (const dl of venueBlocks) {
+    const venueEl = dl.querySelector('.velodrome');
+    if (!venueEl) continue;
+    const venue = normalizeText(venueEl.textContent).replace(/競輪$/, '');
+
+    const rows = Array.from(dl.querySelectorAll('table tr')).filter((tr) => tr.querySelector('td.race'));
+    for (const row of rows) {
+      const raceCell = row.querySelector('td.race');
+      const raceNumber = raceCell ? parseInt(normalizeText(raceCell.textContent), 10) : null;
+      if (!raceNumber) continue;
+
+      const numSpans = Array.from(row.querySelectorAll('td.order .num span'));
+      const order = numSpans
+        .map((span, i) => ({
+          number: parseInt(normalizeText(span.textContent), 10),
+          name: null,
+          rank: i + 1,
+          move: null,
+        }))
+        .filter((o) => !isNaN(o.number));
+      if (order.length === 0) continue;
+
+      const payouts = {};
+      const refundCell = row.querySelector('td.refund');
+      if (refundCell) {
+        const amount = parseYen(refundCell.textContent);
+        if (amount != null) payouts.trifecta = { combo: order.map((o) => o.number).join('-'), amount };
+      }
+
+      results.push({
+        raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+        date: dateLabel,
+        venue,
+        raceNumber,
+        order,
+        payouts,
+        parsedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return results;
+}
+
 function parseResultsFromPage(html, referenceDate = new Date()) {
+  // GambooBETの「払戻金一覧」ページ(全競輪場まとめて掲載)は最優先で試す。
+  if (looksLikeGambooRefundListPage(html)) {
+    const gambooResults = parseGambooRefundListPage(html, referenceDate);
+    if (gambooResults.length > 0) return gambooResults;
+  }
+
   // KEIRIN.JPのPC版結果一覧ページ(jsonData['PJ0306']を含む)は、着順がテーブルではなく
   // JS変数に埋め込まれているため、まずこちらを優先的に試す。
   const pcData = extractPcResultData(html);

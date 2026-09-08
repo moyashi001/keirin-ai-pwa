@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v20';
+  const APP_VERSION = 'v22';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -438,6 +438,14 @@
     $('#next-race-btn').addEventListener('click', () => navigateRaceDetail(1));
     $('#parse-html-btn').addEventListener('click', handleParseHtml);
     $('#parse-result-btn').addEventListener('click', handleParseResultHtml);
+    $('#clear-html-btn').addEventListener('click', () => {
+      $('#html-input').value = '';
+      setStatus('');
+    });
+    $('#clear-result-btn').addEventListener('click', () => {
+      $('#result-html-input').value = '';
+      setResultStatus('');
+    });
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
     $('#copy-article-btn').addEventListener('click', handleCopyArticle);
     const dateFilter = $('#race-date-filter');

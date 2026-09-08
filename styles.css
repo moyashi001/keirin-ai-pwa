@@ -624,6 +624,22 @@ main {
   cursor: pointer;
   margin-top: 10px;
 }
+.button-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.button-row .primary-btn {
+  flex: 1;
+  margin-bottom: 0;
+}
+.button-row .secondary-btn {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding-left: 16px;
+  padding-right: 16px;
+}
 .article-textarea {
   width: 100%;
   background: rgba(0,0,0,0.35);
