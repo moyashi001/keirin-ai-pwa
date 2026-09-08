@@ -16,9 +16,17 @@
  */
 
 (function () {
+  // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
+  // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
+  const APP_VERSION = 'v15';
+
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
     selectedDate: null, // 予想一覧の日付フィルタで選択中の日付(nullなら「最新の未決着日」を自動表示)
+    selectedVenue: '__all__', // 予想一覧の競輪場フィルタで選択中の会場('__all__'なら全会場)
+    raceListScrollY: 0, // レース詳細から「一覧へ戻る」で復元するスクロール位置
+    detailRaceKeys: [], // レース詳細の前後移動用: 現在の絞り込み条件でのraceKey配列
+    detailIndex: -1, // 上記配列内での現在位置
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -55,13 +63,24 @@
     return [...new Set(state.races.map((r) => r.date))].sort().reverse();
   }
 
-  /** 表示対象のレース群。selectedDateが指定されていればその日付、無ければ最新の未決着日。 */
-  function displayedRaces() {
+  /** selectedDateが指定されていればその日付、無ければ最新の未決着日のレース群(競輪場フィルタ適用前) */
+  function racesForSelectedDate() {
     if (state.races.length === 0) return [];
     const targetDate = state.selectedDate || latestUnsettledDate() || state.races[0].date;
-    return state.races
-      .filter((r) => r.date === targetDate)
-      .sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0));
+    return state.races.filter((r) => r.date === targetDate);
+  }
+
+  /** 表示対象の日付に含まれる競輪場の一覧(五十音順)。競輪場フィルタのセレクトボックス用。 */
+  function availableVenues() {
+    return [...new Set(racesForSelectedDate().map((r) => r.venue))].sort((a, b) => a.localeCompare(b, 'ja'));
+  }
+
+  /** 表示対象のレース群。日付フィルタに加え、競輪場フィルタ('__all__'以外)が指定されていれば絞り込む。 */
+  function displayedRaces() {
+    const races = racesForSelectedDate();
+    const filtered =
+      state.selectedVenue && state.selectedVenue !== '__all__' ? races.filter((r) => r.venue === state.selectedVenue) : races;
+    return filtered.sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0));
   }
 
   /** 記事生成・買い目強化などは常に「最新の未決着日(=翌日予想)」を対象にする */
@@ -85,14 +104,32 @@
     select.parentElement.hidden = dates.length <= 1;
   }
 
+  /** 競輪場フィルタのセレクトボックスを表示中の日付に合わせて再構築する */
+  function renderVenueFilter() {
+    const select = $('#race-venue-filter');
+    if (!select) return;
+    const venues = availableVenues();
+    if (!state.selectedVenue || (state.selectedVenue !== '__all__' && !venues.includes(state.selectedVenue))) {
+      state.selectedVenue = '__all__';
+    }
+    select.innerHTML =
+      `<option value="__all__"${state.selectedVenue === '__all__' ? ' selected' : ''}>すべての競輪場</option>` +
+      venues.map((v) => `<option value="${v}"${v === state.selectedVenue ? ' selected' : ''}>${v}</option>`).join('');
+    select.parentElement.hidden = venues.length <= 1;
+  }
+
   function renderRacesView() {
     renderDateFilter();
+    renderVenueFilter();
     const races = displayedRaces();
     const isLatest = races[0] && !races[0].settled;
     $('#race-list').innerHTML = window.KeirinCards.renderRaceList(races);
     $('#races-date-label').textContent = races[0] ? `${isLatest ? '翌日の予想' : '過去の予想'} (${races[0].date})` : '';
     $$('#race-list .race-card').forEach((card) => {
-      card.addEventListener('click', () => showRaceDetail(card.dataset.raceKey));
+      card.addEventListener('click', () => {
+        state.raceListScrollY = window.scrollY;
+        showRaceDetail(card.dataset.raceKey);
+      });
     });
     $('#summary-stats').innerHTML = renderSummaryStats(races);
   }
@@ -106,9 +143,32 @@
   async function showRaceDetail(raceKey) {
     const race = await window.KeirinDB.getRace(raceKey);
     if (!race) return;
+
+    // 前後移動ボタン用: 現在の絞り込み条件(日付・競輪場)でのレース順に位置づける
+    const list = displayedRaces();
+    state.detailRaceKeys = list.map((r) => r.raceKey);
+    state.detailIndex = state.detailRaceKeys.indexOf(raceKey);
+
     $('#race-detail-content').innerHTML = window.KeirinCards.renderRaceDetail(race);
+    renderDetailNavButtons();
     switchTab('race-detail');
     $$('.tab-btn').forEach((b) => b.classList.remove('active'));
+  }
+
+  /** レース詳細の「前のレース/次のレース」ボタンの有効/無効を切り替える */
+  function renderDetailNavButtons() {
+    const prevBtn = $('#prev-race-btn');
+    const nextBtn = $('#next-race-btn');
+    if (!prevBtn || !nextBtn) return;
+    prevBtn.disabled = state.detailIndex <= 0;
+    nextBtn.disabled = state.detailIndex < 0 || state.detailIndex >= state.detailRaceKeys.length - 1;
+  }
+
+  /** レース詳細内で前後のレースへ移動する(offset: -1 or 1) */
+  function navigateRaceDetail(offset) {
+    const newIndex = state.detailIndex + offset;
+    if (newIndex < 0 || newIndex >= state.detailRaceKeys.length) return;
+    showRaceDetail(state.detailRaceKeys[newIndex]);
   }
 
   /**
@@ -262,6 +322,27 @@
     renderResultsView();
   }
 
+  /** 日次ログ1件分の、レースごとの当たり外れ・払戻し内訳を組み立てる(単勝100円購入の想定) */
+  function renderLogBets(bets) {
+    if (!bets || bets.length === 0) return '';
+    return `
+      <div class="log-bets">
+        ${bets
+          .map((bet) => {
+            const state = !bet.judged ? 'unjudged' : bet.hit ? 'hit' : 'miss';
+            const resultText = !bet.judged ? '未判定' : bet.hit ? `的中 +${bet.payout}円` : '外れ';
+            return `
+          <div class="log-bet-row ${state}">
+            <span class="bet-race">${bet.venue ?? ''} ${bet.raceNumber ?? '?'}R</span>
+            <span class="bet-target">${bet.targetNumber ?? '-'} ${bet.targetName ?? ''}（単勝100円）</span>
+            <span class="bet-result">${resultText}</span>
+          </div>`;
+          })
+          .join('')}
+      </div>
+    `;
+  }
+
   async function renderResultsView() {
     const logs = await window.KeirinDB.getAllDailyLogs();
     const container = $('#log-list');
@@ -281,6 +362,7 @@
             <div class="rate ${log.recoveryRate >= 100 ? 'positive' : 'negative'}"><label>回収率</label><span>${log.recoveryRate ?? '-'}%</span></div>
           </div>
           <div class="log-detail">的中 ${log.hitBets}/${log.judgedBets}（判定済み） ・ 全${log.totalBets}買い目</div>
+          ${renderLogBets(log.bets)}
         </div>`
         )
         .join('');
@@ -332,7 +414,11 @@
     $('#back-to-races').addEventListener('click', () => {
       switchTab('races');
       $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
+      // 詳細を開く前にいた位置へスクロールを戻す(先頭に戻さない)
+      requestAnimationFrame(() => window.scrollTo(0, state.raceListScrollY || 0));
     });
+    $('#prev-race-btn').addEventListener('click', () => navigateRaceDetail(-1));
+    $('#next-race-btn').addEventListener('click', () => navigateRaceDetail(1));
     $('#parse-html-btn').addEventListener('click', handleParseHtml);
     $('#parse-result-btn').addEventListener('click', handleParseResultHtml);
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
@@ -344,9 +430,19 @@
         renderRacesView();
       });
     }
+    const venueFilter = $('#race-venue-filter');
+    if (venueFilter) {
+      venueFilter.addEventListener('change', (e) => {
+        state.selectedVenue = e.target.value;
+        renderRacesView();
+      });
+    }
   }
 
   async function init() {
+    const versionEl = $('#app-version');
+    if (versionEl) versionEl.textContent = `Version ${APP_VERSION}`;
+
     bindEvents();
     await loadAllRaces();
     renderRacesView();

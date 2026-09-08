@@ -54,6 +54,13 @@ html, body {
   color: var(--text-dim);
   letter-spacing: 1px;
 }
+.app-version {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  letter-spacing: 1px;
+}
 
 main {
   flex: 1;
@@ -268,14 +275,41 @@ main {
   padding: 40px 10px;
 }
 
+.detail-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0;
+}
 .back-btn {
-  background: none;
-  border: none;
+  background: rgba(0,255,242,0.1);
+  border: 1px solid var(--neon-cyan);
+  border-radius: 10px;
   color: var(--neon-cyan);
   font-size: 13px;
-  margin: 14px 0;
+  font-weight: 700;
+  padding: 8px 14px;
   cursor: pointer;
-  padding: 0;
+}
+.detail-nav-btns {
+  display: flex;
+  gap: 8px;
+}
+.nav-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-glow);
+  border-radius: 10px;
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .detail-header h2 {
@@ -507,6 +541,51 @@ main {
   font-size: 11px;
   color: var(--text-dim);
 }
+.log-bets {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.log-bet-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid transparent;
+  font-size: 12px;
+}
+.log-bet-row.hit {
+  background: rgba(0,255,120,0.08);
+  border-color: rgba(0,255,120,0.35);
+}
+.log-bet-row.miss {
+  background: rgba(255,84,112,0.06);
+  border-color: rgba(255,84,112,0.25);
+}
+.log-bet-row.unjudged {
+  opacity: 0.6;
+}
+.bet-race {
+  color: var(--neon-cyan);
+  font-weight: 700;
+}
+.bet-target {
+  flex: 1;
+  min-width: 120px;
+  color: var(--text-main);
+}
+.bet-result {
+  font-weight: 800;
+  white-space: nowrap;
+}
+.log-bet-row.hit .bet-result { color: var(--neon-lime); }
+.log-bet-row.miss .bet-result { color: #ff5470; }
+.log-bet-row.unjudged .bet-result { color: var(--text-dim); }
 
 .select-box {
   width: 100%;

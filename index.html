@@ -16,6 +16,7 @@
     <header class="app-header">
       <h1>KEIRIN <span class="neon-text">AI</span></h1>
       <p class="app-sub">ブラウザ内AIで競輪を予想する</p>
+      <p id="app-version" class="app-version"></p>
     </header>
 
     <main>
@@ -40,6 +41,10 @@
           <label for="race-date-filter">表示日</label>
           <select id="race-date-filter" class="select-box"></select>
         </div>
+        <div class="date-filter-wrap">
+          <label for="race-venue-filter">競輪場</label>
+          <select id="race-venue-filter" class="select-box"></select>
+        </div>
         <p id="races-date-label" class="races-date-label"></p>
         <div id="summary-stats" class="summary-stats"></div>
         <div id="race-list" class="race-list"></div>
@@ -47,7 +52,13 @@
 
       <!-- レース詳細 -->
       <section id="view-race-detail" class="view">
-        <button id="back-to-races" class="back-btn">← レース一覧へ戻る</button>
+        <div class="detail-toolbar">
+          <button id="back-to-races" class="back-btn">← レース一覧へ戻る</button>
+          <div class="detail-nav-btns">
+            <button id="prev-race-btn" class="nav-btn">← 前のレース</button>
+            <button id="next-race-btn" class="nav-btn">次のレース →</button>
+          </div>
+        </div>
         <div id="race-detail-content"></div>
       </section>
 

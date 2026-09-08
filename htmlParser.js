@@ -11,7 +11,10 @@
  * まとめて抽出する。
  */
 
-const KEIRIN_STYLE_KEYWORDS = ['逃', 'まくり', '差', '両'];
+const KEIRIN_STYLE_KEYWORDS = ['逃', 'まくり', '捲', '差', '両'];
+
+/** 結果表の「決まり手」欄に出現する語。選手名との誤認識を防ぐための判定に使う。 */
+const KIMARITE_WORDS = ['逃げ', '差し', 'まくり', '捲り', 'マーク', '追込', '突放'];
 
 /** 全角数字・全角記号を半角に寄せる */
 function normalizeText(str) {
@@ -34,8 +37,24 @@ function textOf(el) {
 function detectDateLabel(fullText, referenceDate = new Date()) {
   const today = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
 
+  // パターン0: KEIRIN.JPのページ内に埋め込まれたJSON(txtEventDate/kaisaiDate)を最優先で使う。
+  // 結果ページには開催期間(例: hhKikan「2026/09/07～2026/09/09」、初日〜最終日の範囲表記)が
+  // 実際の対象日(hhKaisaihi等)より先にDOM上へ出現することがあり、下記パターン1で単純に
+  // 「最初に見つかった日付」を採用すると前日を誤って拾ってしまう(実際に発生した不具合)。
+  // 埋め込みJSONの値はページの表示対象そのものを指すため、これを優先する。
+  let m = fullText.match(/"txtEventDate"\s*:\s*"(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})"/);
+  if (m) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (!isNaN(d.getTime())) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+  }
+  m = fullText.match(/"kaisaiDate"\s*:\s*"(\d{4})(\d{2})(\d{2})"/);
+  if (m) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (!isNaN(d.getTime())) return `${m[1]}-${m[2]}-${m[3]}`;
+  }
+
   // パターン1: 2026-09-08 / 2026/09/08
-  let m = fullText.match(/(20\d{2})[-\/年](\d{1,2})[-\/月](\d{1,2})/);
+  m = fullText.match(/(20\d{2})[-\/年](\d{1,2})[-\/月](\d{1,2})/);
   if (m) {
     const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (!isNaN(d.getTime())) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
@@ -64,7 +83,13 @@ function formatDate(d) {
 }
 
 function detectVenue(fullText) {
-  const m = fullText.match(/([一-龥ぁ-んァ-ヶー]{2,6}競輪)/);
+  // KEIRIN.JPの埋め込みJSON(joName)を最優先で使う。結果ページ等では「○○競輪」という
+  // 連続した文言が本文中に無く、代わりにお知らせ欄の「詳しくは競輪トピックス」等の
+  // 文言を誤って会場名として拾ってしまうことがあるため。
+  let m = fullText.match(/"joName"\s*:\s*"([^"]+)"/);
+  if (m) return m[1];
+
+  m = fullText.match(/([一-龥々ぁ-んァ-ヶー]{2,6}競輪)/);
   return m ? m[1].replace('競輪', '') : '不明会場';
 }
 
@@ -176,7 +201,7 @@ function detectStartTime(fullText) {
 
 /** レースの級班(A級チャレンジ、S級決勝など)を検出する */
 function detectRaceClass(fullText) {
-  const m = fullText.match(/([SA]級(?:チャレンジ|選抜|特進|一般|準決勝|決勝|[123一二三]班)?|ガールズ[一-龥ぁ-んァ-ヶー]{0,6})/);
+  const m = fullText.match(/([SA]級(?:チャレンジ|選抜|特進|一般|準決勝|決勝|[123一二三]班)?|ガールズ[一-龥々ぁ-んァ-ヶー]{0,6})/);
   return m ? m[1] : null;
 }
 
@@ -202,10 +227,15 @@ function looksLikeOdds(s) {
 }
 
 /** 文字列が選手名らしいか(漢字/カナ主体、2〜8文字、数字を含まない) */
+/** 文字列が選手名らしいか(漢字/カナ主体、2〜8文字、数字を含まない)。
+ * 姓名の間に全角スペースが1つ入る表記(例: 「辰己　豊」)も許容するが、
+ * 「差し」「捲り」等の決まり手そのものは選手名として扱わない。
+ */
 function looksLikeName(s) {
-  if (!s || s.length < 2 || s.length > 10) return false;
+  if (!s || s.length < 2 || s.length > 12) return false;
   if (/\d/.test(s)) return false;
-  return /^[一-龥ぁ-んァ-ヶー・]+$/.test(s);
+  if (KIMARITE_WORDS.includes(s)) return false;
+  return /^[一-龥々ぁ-んァ-ヶー・]+(\s[一-龥々ぁ-んァ-ヶー・]+)?$/.test(s);
 }
 
 function detectStyle(s) {
@@ -217,7 +247,7 @@ function detectStyle(s) {
 
 function normalizeStyleLabel(kw, full) {
   if (full.includes('逃')) return '逃げ';
-  if (full.includes('まくり')) return 'まくり';
+  if (full.includes('まくり') || full.includes('捲')) return 'まくり';
   if (full.includes('差')) return '差し';
   if (full.includes('両')) return '両方';
   return kw;
@@ -345,7 +375,7 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
 
   // テーブルから拾えなかった場合の最終フォールバック: 全文正規表現走査
   if (players.length === 0) {
-    const lineRe = /([1-9])\s*([一-龥ぁ-んァ-ヶー・]{2,8})\s*(\d{2,3}\.\d{1,2})?/g;
+    const lineRe = /([1-9])\s*([一-龥々ぁ-んァ-ヶー・]{2,8})\s*(\d{2,3}\.\d{1,2})?/g;
     let m;
     const seen = new Set();
     while ((m = lineRe.exec(fullText)) !== null) {
@@ -640,14 +670,17 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
       const nameCell = row.find((c) => looksLikeName(c));
       const moveCell = row.find((c, i) => i !== rankIdx && detectStyle(c));
       if (nameCell && numCell.length > 0 && rank >= 1 && rank <= 9) {
-        order.push({ number: Number(numCell[0]), name: nameCell, rank, move: moveCell ? detectStyle(moveCell) : null });
+        order.push({ number: Number(numCell[0]), name: nameCell.replace(/\s+/g, ''), rank, move: moveCell ? detectStyle(moveCell) : null });
       }
     }
     if (order.length === 0) continue;
     order.sort((a, b) => a.rank - b.rank);
 
-    // レース番号を「直前の見出し(h1〜h6)」から推定する(見出しとテーブルの間に他要素があってもよい)
-    let raceNumber = findRaceNumberForTable(table, prevTable, doc);
+    // レース番号: テーブル自身のthead内の表記(例:「1R」)を最優先し、無ければ
+    // 直前の見出し(h1〜h6)から推定する。結果が出ていないレースがテーブル途中に
+    // 挟まっても後続レースの番号がずれないようにするため。
+    const theadText = normalizeText(table.querySelector('thead') ? table.querySelector('thead').textContent : '');
+    let raceNumber = detectRaceNumber(theadText) || findRaceNumberForTable(table, prevTable, doc);
     // 払戻し(単勝・2車複・2車単・ワイド・3連複・3連単)をこのテーブル〜次のテーブルの間から抽出
     const followingText = collectFollowingSectionText(table, tables[i + 1] || null, doc);
     const payouts = extractPayouts(followingText || fullText);
@@ -699,7 +732,7 @@ function parseResultHtml(html, referenceDate = new Date()) {
       const nameCell = row.find((c) => looksLikeName(c));
       const moveCell = row.find((c, i) => i !== rankIdx && detectStyle(c));
       if (nameCell && numCell.length > 0 && rank >= 1 && rank <= 9) {
-        order.push({ number: Number(numCell[0]), name: nameCell, rank, move: moveCell ? detectStyle(moveCell) : null });
+        order.push({ number: Number(numCell[0]), name: nameCell.replace(/\s+/g, ''), rank, move: moveCell ? detectStyle(moveCell) : null });
       }
     }
     if (order.length >= 3) break;
@@ -707,7 +740,7 @@ function parseResultHtml(html, referenceDate = new Date()) {
 
   // フォールバック: 全文から「1着 3 田中太郎」のようなパターン
   if (order.length === 0) {
-    const re = /([1-9])\s*着\s*(\d{1,2})?\s*([一-龥ぁ-んァ-ヶー・]{2,8})/g;
+    const re = /([1-9])\s*着\s*(\d{1,2})?\s*([一-龥々ぁ-んァ-ヶー・]{2,8})/g;
     let m;
     while ((m = re.exec(fullText)) !== null) {
       order.push({ number: m[2] ? Number(m[2]) : null, name: m[3], rank: Number(m[1]) });
