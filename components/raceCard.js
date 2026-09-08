@@ -76,6 +76,12 @@ function comboLabel(numbers) {
   return (numbers || []).join('-');
 }
 
+/** 組み合わせ1点分を「車番(オッズ)」の形式で表示する */
+function comboWithOdds(c) {
+  const odds = c.odds != null ? `${c.odds}倍` : 'オッズ-';
+  return `${comboLabel(c.combo)}（${odds}）`;
+}
+
 /** 本命・中穴・大穴の3階層ワイド買い目をまとめて表示するセクションを組み立てる */
 function renderPredictions(predictions) {
   if (!predictions) return '<p class="empty-msg">買い目データがありません。</p>';
@@ -83,14 +89,19 @@ function renderPredictions(predictions) {
   const rows = [];
 
   if (predictions.honmei) {
-    rows.push({ label: '本命', value: `${comboLabel(predictions.honmei.combo)}（${predictions.honmei.names.join(' / ')}）`, sub: 'ワイド1点' });
+    const odds = predictions.honmei.odds != null ? `${predictions.honmei.odds}倍` : 'オッズ-';
+    rows.push({
+      label: '本命',
+      value: `${comboLabel(predictions.honmei.combo)}（${predictions.honmei.names.join(' / ')} / ${odds}）`,
+      sub: 'ワイド1点',
+    });
   }
   if (predictions.nakaana && predictions.nakaana.length) {
-    const value = predictions.nakaana.map((c) => comboLabel(c.combo)).join(' , ');
+    const value = predictions.nakaana.map(comboWithOdds).join(' , ');
     rows.push({ label: '中穴', value, sub: `ワイド${predictions.nakaana.length}点` });
   }
   if (predictions.ooana && predictions.ooana.length) {
-    const value = predictions.ooana.map((c) => comboLabel(c.combo)).join(' , ');
+    const value = predictions.ooana.map(comboWithOdds).join(' , ');
     rows.push({ label: '大穴', value, sub: `ワイド${predictions.ooana.length}点` });
   }
 

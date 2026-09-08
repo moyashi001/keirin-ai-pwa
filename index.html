@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>競輪AI予想 - KEIRIN NEURAL</title>
+<title>競輪AI予想 - KEIRIN AI</title>
 <meta name="theme-color" content="#0a0014" />
 <meta name="description" content="ブラウザ内AI推論で競輪の勝率・期待値・おすすめレースを予想するPWA" />
 <link rel="manifest" href="manifest.json" />
@@ -14,21 +14,21 @@
 <body>
   <div id="app">
     <header class="app-header">
-      <h1>KEIRIN <span class="neon-text">NEURAL</span></h1>
+      <h1>KEIRIN <span class="neon-text">AI</span></h1>
       <p class="app-sub">ブラウザ内AIで競輪を予想する</p>
     </header>
 
     <main>
-      <!-- HTMLを貼り付けて解析(出走表/結果を自動判定) -->
+      <!-- HTMLを貼り付けて解析(出走表専用) -->
       <section id="view-upload" class="view active">
         <div class="panel">
-          <h2>HTMLを貼り付けて解析</h2>
+          <h2>出走表HTMLを貼り付けて予想</h2>
           <p class="hint">
-            iPhoneのSafariで出走表または結果のページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
-            出走表・結果のどちらを貼り付けたかは自動で判定します（出走表→翌日の予想を生成／結果→本日の回収率を集計）。
+            iPhoneのSafariで出走表のページ(投票選択ページ)を開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
             1レース分でも、複数レース分がまとまったページでもそのまま解析できます。
+            結果ページのHTMLは「回収率」タブに貼り付けてください。
           </p>
-          <textarea id="html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
+          <textarea id="html-input" class="html-textarea" rows="8" placeholder="ここに出走表HTMLを貼り付けてください"></textarea>
           <button id="parse-html-btn" class="primary-btn">解析する</button>
           <p id="upload-status" class="status-msg"></p>
         </div>
@@ -54,7 +54,14 @@
       <!-- 回収率 -->
       <section id="view-results" class="view">
         <div class="panel">
-          <p class="hint">「予想」タブで本日の結果ページのHTMLを貼り付けると、自動判定されてここに回収率が集計されます。</p>
+          <h2>結果HTMLを貼り付けて回収率を集計</h2>
+          <p class="hint">
+            iPhoneのSafariで本日の結果ページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
+            保存済みの予想と突き合わせて回収率を計算し、選手データを更新します。
+          </p>
+          <textarea id="result-html-input" class="html-textarea" rows="8" placeholder="ここに結果HTMLを貼り付けてください"></textarea>
+          <button id="parse-result-btn" class="primary-btn">結果を集計する</button>
+          <p id="result-status" class="status-msg"></p>
         </div>
         <div class="panel">
           <h2>回収率の推移</h2>

@@ -95,13 +95,13 @@ function generateRaceArticle(race, seed = 0) {
   lines.push('【推奨買い目(ワイド)】');
   if (predictions && (predictions.honmei || (predictions.nakaana && predictions.nakaana.length))) {
     if (predictions.honmei) {
-      lines.push(`・本命 ${predictions.honmei.combo.join('-')}（${predictions.honmei.names.join('/')}）`);
+      lines.push(`・本命 ${predictions.honmei.combo.join('-')}（${predictions.honmei.names.join('/')} / ${formatOdds(predictions.honmei.odds)}）`);
     }
     if (predictions.nakaana && predictions.nakaana.length) {
-      lines.push(`・中穴 ${predictions.nakaana.map((c) => c.combo.join('-')).join(' , ')}`);
+      lines.push(`・中穴 ${predictions.nakaana.map((c) => `${c.combo.join('-')}（${formatOdds(c.odds)}）`).join(' , ')}`);
     }
     if (predictions.ooana && predictions.ooana.length) {
-      lines.push(`・大穴 ${predictions.ooana.map((c) => c.combo.join('-')).join(' , ')}`);
+      lines.push(`・大穴 ${predictions.ooana.map((c) => `${c.combo.join('-')}（${formatOdds(c.odds)}）`).join(' , ')}`);
     }
   } else {
     lines.push('データ不足のため買い目の自動生成を見送りました。');
@@ -115,32 +115,45 @@ function generateRaceArticle(race, seed = 0) {
   return lines.join('\n');
 }
 
-/** 翌日の全レースをまとめた記事を生成する */
+const WIN_RATE_THRESHOLD = 0.3;
+
+function starLabel(raceRisk) {
+  if (!raceRisk) return '';
+  return '★'.repeat(raceRisk.stars) + '☆'.repeat(5 - raceRisk.stars);
+}
+
+/** 翌日の全レースをまとめた記事を生成する。本命の勝率が30%を超えるレースのみを厳選して掲載する */
 function generateSummaryArticle(races, seed = 0) {
   const date = races[0] ? races[0].date : '';
+
+  const featured = races
+    .slice()
+    .sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0))
+    .map((race) => ({ race, honmei: rankedPlayers(race)[0] }))
+    .filter(({ honmei }) => honmei && honmei.winRate != null && honmei.winRate > WIN_RATE_THRESHOLD);
 
   const lines = [];
   lines.push(`■ ${date} 競輪AI予想まとめ`);
   lines.push('');
   lines.push(
-    `${date}は全${races.length}レースをAI分析。期待値1.0を超える「おすすめレース」は` +
-      `${races.filter((r) => r.recommended).length}レースだった。`
+    `${date}は全${races.length}レースをAI分析。本命の勝率が30%を超えた注目レースは${featured.length}レースだった。`
   );
   lines.push('');
 
-  races
-    .slice()
-    .sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0))
-    .forEach((race) => {
-      const ranked = rankedPlayers(race);
-      const honmei = ranked[0];
-      const mark = race.recommended ? '🔥おすすめ' : '';
-      lines.push(
-        `${raceTitle(race)}${mark}　本命：${honmei ? `${honmei.number} ${honmei.name}` : '―'}` +
-          `（勝率${formatPercent(honmei && honmei.winRate)} / 期待値${honmei && honmei.expectedValue != null ? honmei.expectedValue : '―'}）`
-      );
-    });
-  lines.push('');
+  featured.forEach(({ race, honmei }) => {
+    const mark = race.recommended ? '🔥おすすめ' : '';
+    lines.push(`◆ ${raceTitle(race)}${mark}`);
+    lines.push(`本命：${honmei.number} ${honmei.name}（勝率${formatPercent(honmei.winRate)} / 期待値${honmei.expectedValue ?? '―'}）`);
+    lines.push(`展開予想：${race.raceFlow || 'データ不足のため展開予想を見送りました。'}`);
+    lines.push(`荒れ度：${race.raceRisk ? `${starLabel(race.raceRisk)}（${race.raceRisk.label}）` : 'データ不足'}`);
+    lines.push(`買い方戦略：${race.raceStrategy || 'データ不足のため戦略の提案を見送りました。'}`);
+    lines.push('');
+  });
+
+  if (featured.length === 0) {
+    lines.push('本命の勝率が30%を超えるレースはありませんでした。');
+    lines.push('');
+  }
 
   lines.push(pick(CLOSERS, seed));
   return lines.join('\n');

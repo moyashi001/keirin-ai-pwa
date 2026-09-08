@@ -137,7 +137,7 @@
     };
   }
 
-  /** 貼り付けられたHTMLを解析し、出走表/結果を自動判定して処理する */
+  /** 「予想」タブに貼り付けられたHTMLを出走表として解析する(結果ページは「回収率」タブで扱う) */
   async function handleParseHtml() {
     const textarea = $('#html-input');
     const html = textarea.value.trim();
@@ -147,21 +147,48 @@
     }
 
     try {
-      setStatus('HTMLの種別を判定中...');
+      setStatus('出走表を解析中...');
       const pageType = window.KeirinParser.detectPageType(html);
-
-      if (pageType === 'racecard') {
-        await handleRaceCard(html);
-      } else if (pageType === 'result') {
-        await handleResult(html);
-      } else {
-        setStatus('出走表・結果のどちらとしても認識できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      if (pageType === 'result') {
+        setStatus('結果ページのHTMLのようです。結果は「回収率」タブに貼り付けてください。', true);
         return;
       }
+      await handleRaceCard(html);
       textarea.value = '';
     } catch (err) {
       console.error(err);
       setStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
+    }
+  }
+
+  function setResultStatus(msg, isError = false) {
+    const el = $('#result-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.toggle('error', isError);
+  }
+
+  /** 「回収率」タブに貼り付けられたHTMLを結果として解析する */
+  async function handleParseResultHtml() {
+    const textarea = $('#result-html-input');
+    const html = textarea.value.trim();
+    if (!html) {
+      setResultStatus('HTMLを貼り付けてください。', true);
+      return;
+    }
+
+    try {
+      setResultStatus('結果を解析中...');
+      const pageType = window.KeirinParser.detectPageType(html);
+      if (pageType === 'racecard') {
+        setResultStatus('出走表ページのHTMLのようです。出走表は「予想」タブに貼り付けてください。', true);
+        return;
+      }
+      await handleResult(html);
+      textarea.value = '';
+    } catch (err) {
+      console.error(err);
+      setResultStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
     }
   }
 
@@ -217,13 +244,13 @@
   async function handleResult(html) {
     const results = window.KeirinParser.parseResultsFromPage(html);
     if (results.length === 0) {
-      setStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
       return;
     }
     const resultDate = results[0].date;
     const todaysRaces = state.races.filter((r) => r.date === resultDate);
     if (todaysRaces.length === 0) {
-      setStatus(`結果と判定されましたが、${resultDate}分の予想データが見つかりませんでした。`, true);
+      setResultStatus(`結果と判定されましたが、${resultDate}分の予想データが見つかりませんでした。`, true);
       return;
     }
     const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
@@ -231,9 +258,8 @@
     await updateRidersFromResults(todaysRaces, results);
     await window.KeirinDB.markRacesSettled(resultDate);
     await loadAllRaces();
-    setStatus(`結果と判定。${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録し、選手データを更新しました。`);
-    switchTab('results');
-    $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'results'));
+    setResultStatus(`結果と判定。${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録し、選手データを更新しました。`);
+    renderResultsView();
   }
 
   async function renderResultsView() {
@@ -308,6 +334,7 @@
       $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
     });
     $('#parse-html-btn').addEventListener('click', handleParseHtml);
+    $('#parse-result-btn').addEventListener('click', handleParseResultHtml);
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
     $('#copy-article-btn').addEventListener('click', handleCopyArticle);
     const dateFilter = $('#race-date-filter');

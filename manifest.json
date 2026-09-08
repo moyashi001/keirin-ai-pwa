@@ -1,5 +1,5 @@
 {
-  "name": "競輪AI予想 - KEIRIN NEURAL",
+  "name": "競輪AI予想 - KEIRIN AI",
   "short_name": "KEIRIN AI",
   "description": "ブラウザ内AI推論で競輪の勝率・期待値・おすすめレースを予想するPWA",
   "start_url": "./index.html",
