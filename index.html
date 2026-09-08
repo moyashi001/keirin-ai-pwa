@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>競輪AI予想 - KEIRIN NEURAL</title>
+<meta name="theme-color" content="#0a0014" />
+<meta name="description" content="ブラウザ内AI推論で競輪の勝率・期待値・おすすめレースを予想するPWA" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="assets/icon-192.png" />
+<link rel="icon" href="assets/icon-192.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <h1>KEIRIN <span class="neon-text">NEURAL</span></h1>
+      <p class="app-sub">ブラウザ内AIで競輪を予想する</p>
+    </header>
+
+    <main>
+      <!-- 本日のレース取得 -->
+      <section id="view-upload" class="view active">
+        <div class="panel">
+          <h2>本日のレースを取得</h2>
+          <p class="hint">競輪公式サイトの「開催日一覧ページ」のURLを1つ入力してください。そのページから本日の全レースURLを自動抽出して取得します。</p>
+          <input type="url" id="index-url-input" class="url-input" placeholder="https://example.com/keirin/2026-09-08/" />
+          <button id="fetch-races-btn" class="primary-btn">本日のレースを取得する</button>
+          <p id="upload-status" class="status-msg"></p>
+        </div>
+        <div class="panel">
+          <h2>（予備）HTMLファイルを直接アップロード</h2>
+          <p class="hint">サイト側の制限で自動取得できない場合は、出走表ページを保存したHTMLファイルをここから読み込めます。</p>
+          <label class="upload-box" for="race-card-input">
+            <span class="upload-icon">⬆</span>
+            <span>HTMLファイルを選択 / ドロップ</span>
+            <input type="file" id="race-card-input" accept=".html,.htm,text/html" multiple hidden />
+          </label>
+        </div>
+      </section>
+
+      <!-- レース一覧 -->
+      <section id="view-races" class="view">
+        <p id="races-date-label" class="races-date-label"></p>
+        <div id="summary-stats" class="summary-stats"></div>
+        <div id="race-list" class="race-list"></div>
+      </section>
+
+      <!-- レース詳細 -->
+      <section id="view-race-detail" class="view">
+        <button id="back-to-races" class="back-btn">← レース一覧へ戻る</button>
+        <div id="race-detail-content"></div>
+      </section>
+
+      <!-- 回収率 -->
+      <section id="view-results" class="view">
+        <div class="panel">
+          <h2>結果HTMLをアップロード</h2>
+          <p class="hint">本日のレース終了後、着順ページを保存したHTMLをアップロードすると、おすすめレースの的中判定・回収率を自動計算します。</p>
+          <label class="upload-box" for="result-input">
+            <span class="upload-icon">⬆</span>
+            <span>結果HTMLを選択</span>
+            <input type="file" id="result-input" accept=".html,.htm,text/html" multiple hidden />
+          </label>
+          <p id="result-status" class="status-msg"></p>
+        </div>
+        <div class="panel">
+          <h2>回収率の推移</h2>
+          <canvas id="recovery-chart" class="recovery-chart"></canvas>
+        </div>
+        <div class="panel">
+          <h2>日次ログ</h2>
+          <div id="log-list"></div>
+        </div>
+      </section>
+
+      <!-- note記事生成 -->
+      <section id="view-article" class="view">
+        <div class="panel">
+          <h2>note投稿用記事の自動生成</h2>
+          <select id="article-race-select" class="select-box"></select>
+          <button id="generate-article-btn" class="primary-btn">記事を生成する</button>
+          <textarea id="article-output" class="article-textarea" rows="18" placeholder="生成された記事がここに表示されます"></textarea>
+          <button id="copy-article-btn" class="secondary-btn">コピー</button>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="upload"><span>📤</span>予想</button>
+      <button class="tab-btn" data-tab="races"><span>🏁</span>一覧</button>
+      <button class="tab-btn" data-tab="results"><span>📈</span>回収率</button>
+      <button class="tab-btn" data-tab="article"><span>📝</span>記事</button>
+    </nav>
+  </div>
+
+  <script src="vendor/ort/ort.min.js"></script>
+  <script src="htmlParser.js"></script>
+  <script src="modelRunner.js"></script>
+  <script src="db.js"></script>
+  <script src="generateArticle.js"></script>
+  <script src="components/betting.js"></script>
+  <script src="components/chart.js"></script>
+  <script src="components/raceCard.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
