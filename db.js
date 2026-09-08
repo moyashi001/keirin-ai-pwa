@@ -15,10 +15,11 @@
  */
 
 const DB_NAME = 'keirin-ai-db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_RACES = 'races';
 const STORE_LOGS = 'dailyLogs';
 const STORE_RIDERS = 'riders';
+const STORE_RESULTS = 'results';
 const RECENT_HISTORY_LENGTH = 5;
 
 let dbPromise = null;
@@ -37,6 +38,12 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_RIDERS)) {
         db.createObjectStore(STORE_RIDERS, { keyPath: 'riderId' });
+      }
+      if (!db.objectStoreNames.contains(STORE_RESULTS)) {
+        // 結果ページは競輪場ごとに別々に貼り付けられるため、レース単位(raceKey)で蓄積し、
+        // 日次回収率は「その日付分の全結果」を都度合算して計算する(後から別会場の結果を
+        // 貼り付けても、先に判定済みだった会場の結果が消えないようにするため)。
+        db.createObjectStore(STORE_RESULTS, { keyPath: 'raceKey' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -179,6 +186,28 @@ async function getDailyLog(date) {
   });
 }
 
+/** 結果(レース単位)を蓄積保存する。同じraceKeyは上書き、別会場・別レースの結果は保持される。 */
+async function saveResults(results) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE_RESULTS, 'readwrite');
+    const store = t.objectStore(STORE_RESULTS);
+    (results || []).forEach((r) => store.put(r));
+    t.oncomplete = () => resolve(results);
+    t.onerror = () => reject(t.error);
+  });
+}
+
+/** 指定した日付(YYYY-MM-DD)分の結果を、これまで貼り付けた全会場分まとめて取得する */
+async function getResultsForDate(date) {
+  const store = await tx(STORE_RESULTS, 'readonly');
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve((req.result || []).filter((r) => r.date === date));
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function getRider(riderId) {
   const store = await tx(STORE_RIDERS, 'readonly');
   return new Promise((resolve, reject) => {
@@ -308,6 +337,8 @@ if (typeof window !== 'undefined') {
     saveDailyLog,
     getAllDailyLogs,
     getDailyLog,
+    saveResults,
+    getResultsForDate,
     buildRiderId,
     getRider,
     getAllRiders,

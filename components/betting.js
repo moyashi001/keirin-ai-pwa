@@ -235,7 +235,10 @@ function judgeWideBet(bet, result) {
  */
 function computeDailyRecovery(date, races, results) {
   const resultMap = new Map(results.map((r) => [r.raceKey, r]));
-  const recommendedRaces = races.filter((r) => r.recommended);
+  // 競輪場ごとにまとめ、各会場内は1R→12Rの順に並べる(表示上の見やすさのため)
+  const recommendedRaces = races
+    .filter((r) => r.recommended)
+    .sort((a, b) => (a.venue || '').localeCompare(b.venue || '', 'ja') || (a.raceNumber || 0) - (b.raceNumber || 0));
   const bets = recommendedRaces.flatMap((race) => {
     const raceBets = generateWideBetsForRace(race);
     const result = resultMap.get(race.raceKey);

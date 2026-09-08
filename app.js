@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v16';
+  const APP_VERSION = 'v17';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -314,7 +314,12 @@
       setResultStatus(`結果と判定されましたが、${resultDate}分の予想データが見つかりませんでした。`, true);
       return;
     }
-    const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
+    // 結果は競輪場ごとに別々に貼り付けられるため、今回分だけでなく同日にこれまで
+    // 貼り付けた全会場分の結果を合算してから回収率を計算する(先に判定済みだった
+    // 会場の結果が、後から別会場を貼り付けた際に消えてしまわないようにするため)。
+    await window.KeirinDB.saveResults(results);
+    const allResultsForDate = await window.KeirinDB.getResultsForDate(resultDate);
+    const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, allResultsForDate);
     await window.KeirinDB.saveDailyLog(log);
     await updateRidersFromResults(todaysRaces, results);
     await window.KeirinDB.markRacesSettled(resultDate);
