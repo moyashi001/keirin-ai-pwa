@@ -19,23 +19,17 @@
     </header>
 
     <main>
-      <!-- 開催日一覧ページから取得(本日の結果集計＋翌日の予想) -->
+      <!-- 出走表HTMLを貼り付けて翌日の予想を生成 -->
       <section id="view-upload" class="view active">
         <div class="panel">
-          <h2>本日の結果＋翌日の予想を取得</h2>
-          <p class="hint">競輪公式サイトの「開催日一覧ページ」のURLを1つ入力してください。そのページから<b>本日の結果ページ</b>と<b>翌日の出走表ページ</b>を自動抽出し、本日分の回収率集計と翌日分のAI予想生成をまとめて行います。</p>
-          <input type="url" id="index-url-input" class="url-input" placeholder="https://example.com/keirin/2026-09-08/" />
-          <button id="fetch-races-btn" class="primary-btn">取得する</button>
+          <h2>翌日の出走表を解析</h2>
+          <p class="hint">
+            iPhoneのSafariで翌日の出走表ページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
+            1レース分でも、複数レース分がまとまったページでもそのまま解析できます。
+          </p>
+          <textarea id="race-card-html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
+          <button id="parse-race-card-btn" class="primary-btn">解析する</button>
           <p id="upload-status" class="status-msg"></p>
-        </div>
-        <div class="panel">
-          <h2>（予備）翌日の出走表HTMLを直接アップロード</h2>
-          <p class="hint">サイト側の制限で自動取得できない場合は、翌日の出走表ページを保存したHTMLファイルをここから読み込めます。</p>
-          <label class="upload-box" for="race-card-input">
-            <span class="upload-icon">⬆</span>
-            <span>HTMLファイルを選択 / ドロップ</span>
-            <input type="file" id="race-card-input" accept=".html,.htm,text/html" multiple hidden />
-          </label>
         </div>
       </section>
 
@@ -55,7 +49,14 @@
       <!-- 回収率 -->
       <section id="view-results" class="view">
         <div class="panel">
-          <p class="hint">「予想」タブで開催日一覧ページのURLから取得すると、本日分の結果が自動集計されます。</p>
+          <h2>本日の結果を解析</h2>
+          <p class="hint">
+            iPhoneのSafariで本日の結果ページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
+            前回保存した予想と自動的に突き合わせて回収率を計算します。
+          </p>
+          <textarea id="result-html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
+          <button id="parse-result-btn" class="primary-btn">集計する</button>
+          <p id="result-status" class="status-msg"></p>
         </div>
         <div class="panel">
           <h2>回収率の推移</h2>

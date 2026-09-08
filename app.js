@@ -2,14 +2,12 @@
  * app.js
  * 画面遷移・イベントハンドリングを行うメインスクリプト。
  *
- * データ取得は「開催日一覧ページ」のURLを1つ入力するだけでよい構成になっている。
- *  1. 一覧ページを1回だけ fetch
- *  2. そこから A.当日の結果ページURL と B.翌日の出走表(開催)ページURL を自動抽出
- *  3. A→結果を取得して、前回保存しておいた予想(当日分)と突き合わせ回収率を計算
- *  4. B→そこから翌日の各レースURLを抽出し、1つずつ fetch(連続アクセス防止のため間隔を空ける)
- *     してAI推論・保存する(これが次にレース一覧タブへ表示される「翌日の予想」になる)
- * 対象サイトがCORSを許可していない場合はブラウザ側でブロックされ得るため、
- * その場合に備えて出走表HTMLを直接アップロードするフォールバックも用意している。
+ * データ取得はURLフェッチではなく、ユーザーがiPhone Safari上のブックマークレットで
+ * ページのHTMLをコピーし、テキストエリアに貼り付けて「解析する」ボタンを押す方式。
+ *  - 「予想」タブ: 翌日の出走表ページのHTMLを貼り付け → AI推論して次回表示するレースとして保存
+ *  - 「回収率」タブ: 当日の結果ページのHTMLを貼り付け → 前回保存済みの予想と突き合わせて回収率を計算
+ * 1回の貼り付けで複数レース分のテーブルが含まれていても、含まれていなくても
+ * どちらでも解析できるようにパーサー側で対応している。
  */
 
 (function () {
@@ -19,8 +17,6 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   function switchTab(tabName) {
     $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tabName));
@@ -32,6 +28,13 @@
 
   function setStatus(msg, isError = false) {
     const el = $('#upload-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.toggle('error', isError);
+  }
+
+  function setResultStatus(msg, isError = false) {
+    const el = $('#result-status');
     if (!el) return;
     el.textContent = msg;
     el.classList.toggle('error', isError);
@@ -74,157 +77,74 @@
     $$('.tab-btn').forEach((b) => b.classList.remove('active'));
   }
 
-  /**
-   * 開催日一覧ページのURLから
-   *   A. 当日の結果 → 回収率計算
-   *   B. 翌日の出走表 → AI推論して次回表示するレースとして保存
-   * を1回の操作で行う(メインの取得経路)。
-   */
-  async function handleFetchFromIndexUrl() {
-    const input = $('#index-url-input');
-    const indexUrl = input.value.trim();
-    if (!indexUrl) {
-      setStatus('開催日一覧ページのURLを入力してください。', true);
+  /** 「予想」タブ: 貼り付けられた出走表HTMLを解析してAI推論・保存する */
+  async function handleParseRaceCardHtml() {
+    const textarea = $('#race-card-html-input');
+    const html = textarea.value.trim();
+    if (!html) {
+      setStatus('出走表のHTMLを貼り付けてください。', true);
       return;
     }
-
-    const btn = $('#fetch-races-btn');
-    btn.disabled = true;
-    let recoverySummary = '';
     try {
-      setStatus('開催日一覧ページを取得中...');
-      const indexRes = await fetch(indexUrl);
-      if (!indexRes.ok) throw new Error(`一覧ページの取得に失敗しました（status ${indexRes.status}）`);
-      const indexHtml = await indexRes.text();
-
-      const { resultUrl, nextDayUrl } = window.KeirinParser.extractResultAndNextDayUrls(indexHtml, indexUrl);
-      if (!resultUrl && !nextDayUrl) {
-        setStatus('一覧ページから結果/出走表のURLを検出できませんでした。下のHTML手動アップロードをお試しください。', true);
+      setStatus('解析中...');
+      const races = window.KeirinParser.parseRaceCardsFromPage(html);
+      if (races.length === 0) {
+        setStatus('選手情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
         return;
       }
-
-      // --- A. 当日の結果を取得して回収率を計算 ---
-      if (resultUrl) {
-        setStatus('本日の結果ページを取得中...');
-        try {
-          const resultRes = await fetch(resultUrl);
-          if (resultRes.ok) {
-            const resultHtml = await resultRes.text();
-            const results = window.KeirinParser.parseResultsFromPage(resultHtml);
-            if (results.length > 0) {
-              const resultDate = results[0].date;
-              const todaysRaces = state.races.filter((r) => r.date === resultDate);
-              if (todaysRaces.length > 0) {
-                const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
-                await window.KeirinDB.saveDailyLog(log);
-                await window.KeirinDB.clearRacesByDate(resultDate);
-                await loadAllRaces();
-                recoverySummary = `本日(${resultDate})の回収率 ${log.recoveryRate ?? '-'}%。`;
-              } else {
-                recoverySummary = '本日の結果を取得しましたが、対応する予想データが見つかりませんでした。';
-              }
-            }
-          } else {
-            console.warn('結果ページの取得に失敗しました:', resultRes.status);
-          }
-        } catch (err) {
-          console.warn('結果ページの取得に失敗しました:', err);
-        }
-      }
-
-      // --- B. 翌日の出走表を取得してAI推論 ---
-      if (!nextDayUrl) {
-        setStatus(`${recoverySummary} 翌日の出走表URLを検出できませんでした。`.trim(), true);
-        return;
-      }
-
-      if (resultUrl) await sleep(900 + Math.random() * 600); // 連続アクセス防止のための間隔
-
-      setStatus(`${recoverySummary} 翌日の開催ページを取得中...`.trim());
-      const nextRes = await fetch(nextDayUrl);
-      if (!nextRes.ok) throw new Error(`翌日の出走表ページの取得に失敗しました（status ${nextRes.status}）`);
-      const nextHtml = await nextRes.text();
-
-      const raceUrls = window.KeirinParser.extractRaceUrlsFromIndexPage(nextHtml, nextDayUrl);
-      const parsed = [];
-
-      if (raceUrls.length > 0) {
-        for (let i = 0; i < raceUrls.length; i++) {
-          setStatus(`${recoverySummary} 翌日のレース情報を取得中... (${i + 1}/${raceUrls.length})`.trim());
-          if (i > 0) await sleep(900 + Math.random() * 600);
-          try {
-            const res = await fetch(raceUrls[i]);
-            if (!res.ok) continue;
-            const html = await res.text();
-            const race = window.KeirinParser.parseRaceCardHtml(html);
-            if (race.players && race.players.length > 0) parsed.push(race);
-          } catch (err) {
-            console.warn('レースページの取得に失敗しました:', raceUrls[i], err);
-          }
-        }
-      } else {
-        // nextDayUrl自体が単一レース分の出走表だったケースへのフォールバック
-        const race = window.KeirinParser.parseRaceCardHtml(nextHtml);
-        if (race.players && race.players.length > 0) parsed.push(race);
-      }
-
-      if (parsed.length === 0) {
-        setStatus(`${recoverySummary} 翌日のレース情報を取得できませんでした。下のHTML手動アップロードをお試しください。`.trim(), true);
-        return;
-      }
-
-      await finalizePredictionAndSave(parsed, recoverySummary);
+      setStatus(`${races.length}レース分を検出。AI推論を実行中...`);
+      const predicted = await window.KeirinModel.predictRaces(races);
+      await window.KeirinDB.saveRaces(predicted);
+      await loadAllRaces();
+      setStatus(`翌日${predicted.length}レース分を予想しました。`);
+      textarea.value = '';
+      switchTab('races');
+      $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
     } catch (err) {
       console.error(err);
-      setStatus(
-        `${recoverySummary} 取得に失敗しました。対象サイトがブラウザからの直接アクセスを許可していない可能性があります。下のHTML手動アップロードをお試しください。`.trim(),
-        true
-      );
-    } finally {
-      btn.disabled = false;
+      setStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
     }
   }
 
-  /** フォールバック: 翌日の出走表HTMLを手動アップロードして取り込む */
-  async function handleRaceCardUpload(files) {
-    if (!files || files.length === 0) return;
-    setStatus(`解析中... (0/${files.length})`);
-    const parsed = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const text = await file.text();
-        const race = window.KeirinParser.parseRaceCardHtml(text);
-        if (!race.players || race.players.length === 0) {
-          setStatus(`「${file.name}」から選手情報を検出できませんでした。HTML構造をご確認ください。`, true);
-          continue;
-        }
-        parsed.push(race);
-        setStatus(`解析中... (${i + 1}/${files.length})`);
-      } catch (err) {
-        console.error(err);
-        setStatus(`「${file.name}」の解析でエラーが発生しました。`, true);
+  /** 「回収率」タブ: 貼り付けられた結果HTMLを解析し、前回の予想と突き合わせて回収率を計算する */
+  async function handleParseResultHtml() {
+    const textarea = $('#result-html-input');
+    const html = textarea.value.trim();
+    if (!html) {
+      setResultStatus('結果のHTMLを貼り付けてください。', true);
+      return;
+    }
+    try {
+      setResultStatus('解析中...');
+      const results = window.KeirinParser.parseResultsFromPage(html);
+      if (results.length === 0) {
+        setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+        return;
       }
+      const resultDate = results[0].date;
+      const todaysRaces = state.races.filter((r) => r.date === resultDate);
+      if (todaysRaces.length === 0) {
+        setResultStatus(`${resultDate}分の予想データが見つかりませんでした。`, true);
+        return;
+      }
+      const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
+      await window.KeirinDB.saveDailyLog(log);
+      await window.KeirinDB.clearRacesByDate(resultDate);
+      await loadAllRaces();
+      setResultStatus(`${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録しました。`);
+      textarea.value = '';
+      renderResultsView();
+    } catch (err) {
+      console.error(err);
+      setResultStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
     }
-    if (parsed.length === 0) return;
-    await finalizePredictionAndSave(parsed);
-  }
-
-  async function finalizePredictionAndSave(parsedRaces, prefix = '') {
-    setStatus(`${prefix} AI推論を実行中...`.trim());
-    const predicted = await window.KeirinModel.predictRaces(parsedRaces);
-    await window.KeirinDB.saveRaces(predicted);
-    await loadAllRaces();
-    setStatus(`${prefix} 翌日${predicted.length}レース分を予想しました。`.trim());
-    switchTab('races');
-    $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
   }
 
   async function renderResultsView() {
     const logs = await window.KeirinDB.getAllDailyLogs();
     const container = $('#log-list');
     if (logs.length === 0) {
-      container.innerHTML = '<p class="empty-msg">まだ回収率ログがありません。「本日のレースを取得」を実行すると、開催日一覧ページから本日分の結果も自動集計されます。</p>';
+      container.innerHTML = '<p class="empty-msg">まだ回収率ログがありません。上に本日の結果ページのHTMLを貼り付けて集計してください。</p>';
     } else {
       container.innerHTML = logs
         .slice()
@@ -291,8 +211,8 @@
       switchTab('races');
       $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
     });
-    $('#fetch-races-btn').addEventListener('click', handleFetchFromIndexUrl);
-    $('#race-card-input').addEventListener('change', (e) => handleRaceCardUpload(e.target.files));
+    $('#parse-race-card-btn').addEventListener('click', handleParseRaceCardHtml);
+    $('#parse-result-btn').addEventListener('click', handleParseResultHtml);
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
     $('#copy-article-btn').addEventListener('click', handleCopyArticle);
   }

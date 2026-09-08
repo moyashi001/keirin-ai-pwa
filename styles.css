@@ -93,30 +93,6 @@ main {
   margin: 0 0 14px;
 }
 
-.upload-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 28px 12px;
-  border: 2px dashed var(--neon-purple);
-  border-radius: 14px;
-  color: var(--text-main);
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: center;
-  font-size: 13px;
-}
-.upload-box:hover {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 20px rgba(0,255,242,0.25);
-}
-.upload-icon {
-  font-size: 26px;
-  color: var(--neon-cyan);
-  text-shadow: 0 0 10px var(--neon-cyan);
-}
-
 .status-msg {
   margin: 12px 0 0;
   font-size: 12.5px;
@@ -127,17 +103,20 @@ main {
   color: #ff5470;
 }
 
-.url-input {
+.html-textarea {
   width: 100%;
-  padding: 12px 14px;
-  background: rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.35);
   border: 1px solid var(--border-glow);
   border-radius: 10px;
   color: var(--text-main);
-  font-size: 13px;
+  padding: 12px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  line-height: 1.5;
+  resize: vertical;
   margin-bottom: 12px;
 }
-.url-input::placeholder {
+.html-textarea::placeholder {
   color: rgba(154,163,199,0.6);
 }
 

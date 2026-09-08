@@ -1,13 +1,14 @@
 /**
  * htmlParser.js
- * 競輪公式サイトの「開催日一覧ページHTML」から
- *   A. 当日の結果ページURL
- *   B. 翌日の出走表(開催)ページURL
- * を自動抽出し、出走表HTML・結果HTMLを構造化JSONに変換する。
+ * ユーザーがiPhone Safari上のブックマークレットでコピーし、
+ * テキストエリアに貼り付けた「出走表HTML」「結果HTML」を構造化JSONに変換する。
  * サイト側のマークアップ変更に強くするため、複数のフォールバック戦略を積み重ねている。
- *  1. ラベル/クラス名/日付によるヒント検索
+ *  1. ラベル/クラス名によるヒント検索
  *  2. テーブル構造からのヒューリスティック推定
  *  3. 全文テキストへの正規表現フォールバック
+ * 1ページに複数レース分の情報がまとまっている場合(テーブルが複数ある場合)は、
+ * parseRaceCardsFromPage / parseResultsFromPage がテーブルごとに1レースとして
+ * まとめて抽出する。
  */
 
 const KEIRIN_STYLE_KEYWORDS = ['逃', 'まくり', '差', '両'];
@@ -277,111 +278,139 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
 }
 
 /**
- * 「開催日一覧ページ」のHTMLから、当日の各レースページURLを自動抽出する。
- * サイト構造が不明でも壊れにくいよう、リンクテキスト/href双方から
- * レースページらしさをヒューリスティックに判定する。
- * @param {string} html 開催日一覧ページのHTML
- * @param {string} baseUrl 相対URLを絶対URLへ解決するための基準URL(一覧ページ自身のURL)
- * @returns {string[]} 重複除去済みのレースページURL一覧(出現順)
+ * 複数テーブルが並ぶページで、あるテーブルに対応するレース番号を推定する。
+ * テーブル直前の兄弟要素だけでなく、DOM順序を遡って「直前の見出し(h1〜h6)」を
+ * 探す(1つ前の対象テーブルより後の範囲に限定する)ことで、見出しとテーブルの間に
+ * 別の要素(説明文・オッズ表など)が挟まっていても正しく対応付けられるようにしている。
+ * @param {Element} table 対象テーブル
+ * @param {Element|null} boundaryEl 1つ前の対象テーブル(この要素より後だけを見出し候補にする)
+ * @param {Document} doc
  */
-function extractRaceUrlsFromIndexPage(html, baseUrl) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const anchors = Array.from(doc.querySelectorAll('a[href]'));
-  const seen = new Set();
-  const urls = [];
-
-  for (const a of anchors) {
-    const text = normalizeText(a.textContent);
-    const href = a.getAttribute('href') || '';
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
-
-    const looksLikeRaceText = /^第?\s*\d{1,2}\s*[Rレース]/.test(text) || /出走表/.test(text);
-    const looksLikeRaceHref = /race|shusso|degree|raceNumber|raceNo|hd=|rno=/i.test(href);
-    if (!looksLikeRaceText && !looksLikeRaceHref) continue;
-
-    let absolute;
-    try {
-      absolute = new URL(href, baseUrl).href;
-    } catch (_) {
+function findRaceNumberForTable(table, boundaryEl, doc) {
+  const walker = doc.createTreeWalker(doc.body || doc, NodeFilter.SHOW_ELEMENT);
+  let node;
+  let pastBoundary = !boundaryEl;
+  let lastHeadingText = '';
+  while ((node = walker.nextNode())) {
+    if (node === table) break;
+    if (node === boundaryEl) {
+      pastBoundary = true;
       continue;
     }
-    if (seen.has(absolute)) continue;
-    seen.add(absolute);
-    urls.push(absolute);
+    if (!pastBoundary) continue;
+    if (/^H[1-6]$/.test(node.tagName) || node.tagName === 'CAPTION') {
+      lastHeadingText = node.textContent;
+    }
   }
-
-  return urls;
-}
-
-/** 'YYYY-MM-DD' 文字列同士が同じ日かどうか(タイムゾーンに影響されない文字列比較) */
-function isSameDateLabel(a, b) {
-  return !!a && !!b && a === b;
+  return detectRaceNumber(normalizeText(lastHeadingText));
 }
 
 /**
- * 開催日一覧ページのHTMLから「当日の結果ページURL」と「翌日の出走表(開催)ページURL」を
- * それぞれ1つずつ抽出する。サイト構造が不明でも壊れにくいよう、
- * リンクの周辺テキストから日付を推定しつつ、キーワードだけのゆるい判定にもフォールバックする。
- * @param {string} html 開催日一覧ページのHTML
- * @param {string} baseUrl 相対URLを絶対URLへ解決するための基準URL
- * @param {Date} [referenceDate] テスト用に「今日」を差し替え可能
- * @returns {{ resultUrl: string|null, nextDayUrl: string|null }}
+ * 貼り付けられたHTML内の「選手情報を含むテーブル」を全て探す。
+ * テーブルが1つしか無い場合(または見つからない場合)は空配列を返し、
+ * 呼び出し側で従来の単一レース用ロジックにフォールバックできるようにする。
  */
-function extractResultAndNextDayUrls(html, baseUrl, referenceDate = new Date()) {
+function findPlayerTables(doc) {
+  return Array.from(doc.querySelectorAll('table')).filter((table) => {
+    const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
+      Array.from(tr.querySelectorAll('td,th')).map((c) => textOf(c))
+    );
+    return rows.some((r) => r.some((c) => /^\d{1,2}$/.test(c)) && r.some((c) => looksLikeName(c)));
+  });
+}
+
+/**
+ * 1つのテーブル(選手情報を含む)から、そのレースの選手配列を組み立てる。
+ * parseRaceCardHtml / parseRaceCardsFromPage の共通ロジック。
+ */
+function buildPlayersFromTable(table, fullText, oddsMap) {
+  const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
+    Array.from(tr.querySelectorAll('td,th')).map((c) => textOf(c))
+  );
+  const playerRows = rows.filter((r) => r.some((c) => /^\d{1,2}$/.test(c)) && r.some((c) => looksLikeName(c)));
+  let players = playerRows.map(extractPlayerFromRow).filter((p) => p.name);
+
+  players = players.map((p) => ({
+    ...p,
+    odds: p.odds != null ? p.odds : oddsMap[p.number] != null ? oddsMap[p.number] : null,
+  }));
+
+  players = players.map((p) => {
+    if (p.style) return p;
+    const idx = fullText.indexOf(p.name);
+    if (idx >= 0) {
+      const near = fullText.slice(idx, idx + 20);
+      const st = detectStyle(near);
+      if (st) return { ...p, style: st };
+    }
+    return p;
+  });
+
+  players.sort((a, b) => (a.number || 99) - (b.number || 99));
+  return players;
+}
+
+/**
+ * 貼り付けられたHTMLに複数レース分の出走表テーブルが並んでいる場合に、
+ * テーブルごとに1レースとして抽出する。テーブルが1つしか見つからない場合は
+ * parseRaceCardHtml と同じ結果を1件だけ返す(後方互換)。
+ * @param {string} html 出走表ページのHTML(1レース分でも複数レース分でも可)
+ * @param {Date} [referenceDate]
+ * @returns {object[]} parseRaceCardHtml() と同じ形のレースオブジェクトの配列
+ */
+function parseRaceCardsFromPage(html, referenceDate = new Date()) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  const anchors = Array.from(doc.querySelectorAll('a[href]'));
+  const playerTables = findPlayerTables(doc);
 
-  const today = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  const todayLabel = formatDate(today);
-  const tomorrowLabel = formatDate(tomorrow);
-
-  let resultUrl = null;
-  let resultUrlDated = false;
-  let nextDayUrl = null;
-  let nextDayUrlDated = false;
-
-  const resolve = (href) => {
-    try {
-      return new URL(href, baseUrl).href;
-    } catch (_) {
-      return null;
-    }
-  };
-
-  for (const a of anchors) {
-    const href = a.getAttribute('href') || '';
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
-    const text = normalizeText(a.textContent);
-    const context = normalizeText((a.closest('li,tr,div,td,section,article') || a).textContent).slice(0, 80);
-
-    const isResultLike = /結果|着順|払戻/.test(text) || /result|chakujun|haraimodoshi/i.test(href);
-    const isCardLike = /出走表|番組|出走/.test(text) || /race|card|degree|shusso|syusso|hd=|rno=/i.test(href);
-    if (!isResultLike && !isCardLike) continue;
-
-    // 周辺テキストに日付らしき記述があれば、それが今日/明日かを判定する
-    const contextDateLabel = /本日|今日/.test(context) ? todayLabel : /明日|翌日/.test(context) ? tomorrowLabel : detectDateLabel(context, referenceDate);
-    const absolute = resolve(href);
-    if (!absolute) continue;
-
-    if (isResultLike) {
-      const matchesToday = isSameDateLabel(contextDateLabel, todayLabel);
-      if (!resultUrl || (matchesToday && !resultUrlDated)) {
-        resultUrl = absolute;
-        resultUrlDated = matchesToday;
-      }
-    }
-    if (isCardLike) {
-      const matchesTomorrow = isSameDateLabel(contextDateLabel, tomorrowLabel);
-      if (!nextDayUrl || (matchesTomorrow && !nextDayUrlDated)) {
-        nextDayUrl = absolute;
-        nextDayUrlDated = matchesTomorrow;
-      }
-    }
+  if (playerTables.length <= 1) {
+    const single = parseRaceCardHtml(html, referenceDate);
+    return single.players.length > 0 ? [single] : [];
   }
 
-  return { resultUrl, nextDayUrl };
+  const fullText = normalizeText(doc.body ? doc.body.textContent : html);
+  const dateLabel = detectDateLabel(fullText, referenceDate);
+  const venue = detectVenue(fullText);
+  const oddsMap = extractOddsMap(doc);
+  let bankNote = null;
+  const bankMatch = fullText.match(/(バンク周長[^\s、。]{0,20}|周長\s*\d{3}m[^\s、。]{0,10}|みなし直線[^\s、。]{0,20})/);
+  if (bankMatch) bankNote = bankMatch[1];
+
+  const races = [];
+  const usedRaceNumbers = new Set();
+  let fallbackRaceNo = 1;
+  let prevTable = null;
+
+  for (const table of playerTables) {
+    const players = buildPlayersFromTable(table, fullText, oddsMap);
+    if (players.length === 0) {
+      prevTable = table;
+      continue;
+    }
+
+    const lines = detectLines(fullText, players);
+
+    let raceNumber = findRaceNumberForTable(table, prevTable, doc);
+    prevTable = table;
+    while (raceNumber && usedRaceNumbers.has(raceNumber)) raceNumber = null; // 誤検出で重複した場合はフォールバック
+    if (!raceNumber) {
+      while (usedRaceNumbers.has(fallbackRaceNo)) fallbackRaceNo++;
+      raceNumber = fallbackRaceNo;
+    }
+    usedRaceNumbers.add(raceNumber);
+
+    races.push({
+      raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+      date: dateLabel,
+      venue,
+      raceNumber,
+      bankNote,
+      lines,
+      players,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+
+  return races;
 }
 
 /**
@@ -400,6 +429,7 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
   const results = [];
   let fallbackRaceNo = 1;
   const usedRaceNumbers = new Set();
+  let prevTable = null;
 
   for (const table of tables) {
     const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
@@ -419,13 +449,9 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
     if (order.length === 0) continue;
     order.sort((a, b) => a.rank - b.rank);
 
-    // レース番号をテーブル直前の見出しやcaptionから推定する
-    const precedingText = normalizeText(
-      (table.caption ? table.caption.textContent : '') +
-        ' ' +
-        (table.previousElementSibling ? table.previousElementSibling.textContent : '')
-    );
-    let raceNumber = detectRaceNumber(precedingText);
+    // レース番号を「直前の見出し(h1〜h6)」から推定する(見出しとテーブルの間に他要素があってもよい)
+    let raceNumber = findRaceNumberForTable(table, prevTable, doc);
+    prevTable = table;
     while (raceNumber && usedRaceNumbers.has(raceNumber)) raceNumber = null; // 誤検出で重複した場合はフォールバック
     if (!raceNumber) {
       while (usedRaceNumbers.has(fallbackRaceNo)) fallbackRaceNo++;
@@ -502,10 +528,9 @@ function parseResultHtml(html, referenceDate = new Date()) {
 if (typeof window !== 'undefined') {
   window.KeirinParser = {
     parseRaceCardHtml,
+    parseRaceCardsFromPage,
     parseResultHtml,
     parseResultsFromPage,
-    extractRaceUrlsFromIndexPage,
-    extractResultAndNextDayUrls,
     normalizeText,
   };
 }
