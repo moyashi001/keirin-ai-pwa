@@ -287,6 +287,74 @@ main {
   margin: 4px 0;
 }
 
+.section-title {
+  margin: 22px 0 8px;
+  font-size: 13px;
+  color: var(--neon-cyan);
+  letter-spacing: 1px;
+  text-shadow: 0 0 8px rgba(0,255,242,0.4);
+}
+
+.prediction-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prediction-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-glow);
+  border-radius: 10px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+.prediction-type {
+  flex: 0 0 56px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--neon-magenta);
+}
+.prediction-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.prediction-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 8px;
+}
+.odds-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-glow);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.odds-num {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--neon-purple);
+  color: #fff;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .table-scroll {
   overflow-x: auto;
   margin-top: 12px;

@@ -73,6 +73,24 @@ function detectRaceNumber(fullText) {
   return m ? Number(m[1]) : null;
 }
 
+/** 発走時刻(例: 17:05 / 17時05分)を検出する */
+function detectStartTime(fullText) {
+  const m = fullText.match(/(\d{1,2})[:時](\d{2})分?/);
+  if (!m) return null;
+  return `${pad2(m[1])}:${pad2(m[2])}`;
+}
+
+/** レースの級班(A級チャレンジ、S級決勝など)を検出する */
+function detectRaceClass(fullText) {
+  const m = fullText.match(/([SA]級(?:チャレンジ|選抜|特進|一般|準決勝|決勝|[123一二三]班)?|ガールズ[一-龥ぁ-んァ-ヶー]{0,6})/);
+  return m ? m[1] : null;
+}
+
+/** レース名(例: 松戸競輪 5R)を組み立てる */
+function buildRaceName(venue, raceNumber) {
+  return `${venue}競輪${raceNumber ? ` ${raceNumber}R` : ''}`;
+}
+
 /** 文字列が競走得点らしいか(60〜130の範囲の小数) */
 function looksLikeScore(s) {
   const m = s.match(/^\d{2,3}(\.\d{1,2})?$/);
@@ -198,6 +216,8 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
   const dateLabel = detectDateLabel(fullText, referenceDate);
   const venue = detectVenue(fullText);
   const raceNumber = detectRaceNumber(fullText);
+  const startTime = detectStartTime(fullText);
+  const raceClass = detectRaceClass(fullText);
 
   // 出走表本体らしきテーブルを探す(行数が最も多いテーブルを採用)
   const tables = Array.from(doc.querySelectorAll('table'));
@@ -265,8 +285,13 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
 
   players.sort((a, b) => (a.number || 99) - (b.number || 99));
 
+  const raceKey = `${dateLabel}_${venue}_${raceNumber || 'R'}`;
   return {
-    raceKey: `${dateLabel}_${venue}_${raceNumber || 'R'}`,
+    raceKey,
+    raceId: raceKey,
+    raceName: buildRaceName(venue, raceNumber),
+    raceClass,
+    startTime,
     date: dateLabel,
     venue,
     raceNumber,
@@ -278,19 +303,19 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
 }
 
 /**
- * 複数テーブルが並ぶページで、あるテーブルに対応するレース番号を推定する。
- * テーブル直前の兄弟要素だけでなく、DOM順序を遡って「直前の見出し(h1〜h6)」を
- * 探す(1つ前の対象テーブルより後の範囲に限定する)ことで、見出しとテーブルの間に
+ * 複数テーブルが並ぶページで、あるテーブルの「見出しセクション」のテキストを集める。
+ * DOM順序を遡って、1つ前の対象テーブルより後・このテーブルより前にある
+ * 見出し(h1〜h6)・caption・pタグのテキストを連結する。見出しとテーブルの間に
  * 別の要素(説明文・オッズ表など)が挟まっていても正しく対応付けられるようにしている。
  * @param {Element} table 対象テーブル
  * @param {Element|null} boundaryEl 1つ前の対象テーブル(この要素より後だけを見出し候補にする)
  * @param {Document} doc
  */
-function findRaceNumberForTable(table, boundaryEl, doc) {
+function collectPrecedingSectionText(table, boundaryEl, doc) {
   const walker = doc.createTreeWalker(doc.body || doc, NodeFilter.SHOW_ELEMENT);
   let node;
   let pastBoundary = !boundaryEl;
-  let lastHeadingText = '';
+  const texts = [];
   while ((node = walker.nextNode())) {
     if (node === table) break;
     if (node === boundaryEl) {
@@ -298,11 +323,55 @@ function findRaceNumberForTable(table, boundaryEl, doc) {
       continue;
     }
     if (!pastBoundary) continue;
-    if (/^H[1-6]$/.test(node.tagName) || node.tagName === 'CAPTION') {
-      lastHeadingText = node.textContent;
+    if (/^H[1-6]$/.test(node.tagName) || node.tagName === 'CAPTION' || node.tagName === 'P') {
+      texts.push(node.textContent);
     }
   }
-  return detectRaceNumber(normalizeText(lastHeadingText));
+  return normalizeText(texts.join(' '));
+}
+
+/** 対象テーブルに対応するレース番号を、直前の見出しセクションから推定する */
+function findRaceNumberForTable(table, boundaryEl, doc) {
+  return detectRaceNumber(collectPrecedingSectionText(table, boundaryEl, doc));
+}
+
+/** 対象テーブルより後・次の境界要素より前にある要素のテキストを集める(払戻し表の検出用) */
+function collectFollowingSectionText(table, nextBoundaryEl, doc) {
+  const walker = doc.createTreeWalker(doc.body || doc, NodeFilter.SHOW_ELEMENT);
+  let node;
+  let started = false;
+  const texts = [];
+  while ((node = walker.nextNode())) {
+    if (node === table) {
+      started = true;
+      continue;
+    }
+    if (!started) continue;
+    if (node === nextBoundaryEl) break;
+    texts.push(node.textContent);
+  }
+  return normalizeText(texts.join(' '));
+}
+
+const PAYOUT_PATTERNS = [
+  { key: 'win', label: '単勝', re: /単勝[\s:：]*([0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+  { key: 'quinella', label: '2車複', re: /(?:2車複|二車複)[\s:：]*([0-9]{1,2}[-‐=][0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+  { key: 'exacta', label: '2車単', re: /(?:2車単|二車単)[\s:：]*([0-9]{1,2}[-‐][0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+  { key: 'wide', label: 'ワイド', re: /ワイド[\s:：]*([0-9]{1,2}[-‐=][0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+  { key: 'trio', label: '3連複', re: /(?:3連複|三連複)[\s:：]*([0-9]{1,2}[-‐=][0-9]{1,2}[-‐=][0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+  { key: 'trifecta', label: '3連単', re: /(?:3連単|三連単)[\s:：]*([0-9]{1,2}[-‐][0-9]{1,2}[-‐][0-9]{1,2})[^\d]{0,6}?([\d,]+)円/ },
+];
+
+/** テキストから券種ごとの払戻し(組み合わせ・金額)を検出する */
+function extractPayouts(sectionText) {
+  const payouts = {};
+  for (const { key, re } of PAYOUT_PATTERNS) {
+    const m = sectionText.match(re);
+    if (m) {
+      payouts[key] = { combo: m[1], amount: parseInt(m[2].replace(/,/g, ''), 10) };
+    }
+  }
+  return payouts;
 }
 
 /**
@@ -389,7 +458,10 @@ function parseRaceCardsFromPage(html, referenceDate = new Date()) {
 
     const lines = detectLines(fullText, players);
 
-    let raceNumber = findRaceNumberForTable(table, prevTable, doc);
+    const sectionText = collectPrecedingSectionText(table, prevTable, doc);
+    let raceNumber = detectRaceNumber(sectionText);
+    const startTime = detectStartTime(sectionText) || detectStartTime(fullText);
+    const raceClass = detectRaceClass(sectionText) || detectRaceClass(fullText);
     prevTable = table;
     while (raceNumber && usedRaceNumbers.has(raceNumber)) raceNumber = null; // 誤検出で重複した場合はフォールバック
     if (!raceNumber) {
@@ -398,8 +470,13 @@ function parseRaceCardsFromPage(html, referenceDate = new Date()) {
     }
     usedRaceNumbers.add(raceNumber);
 
+    const raceKey = `${dateLabel}_${venue}_${raceNumber}`;
     races.push({
-      raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+      raceKey,
+      raceId: raceKey,
+      raceName: buildRaceName(venue, raceNumber),
+      raceClass,
+      startTime,
       date: dateLabel,
       venue,
       raceNumber,
@@ -431,7 +508,8 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
   const usedRaceNumbers = new Set();
   let prevTable = null;
 
-  for (const table of tables) {
+  for (let i = 0; i < tables.length; i++) {
+    const table = tables[i];
     const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
       Array.from(tr.querySelectorAll('td,th')).map((c) => textOf(c))
     );
@@ -451,6 +529,9 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
 
     // レース番号を「直前の見出し(h1〜h6)」から推定する(見出しとテーブルの間に他要素があってもよい)
     let raceNumber = findRaceNumberForTable(table, prevTable, doc);
+    // 払戻し(単勝・2車複・2車単・ワイド・3連複・3連単)をこのテーブル〜次のテーブルの間から抽出
+    const followingText = collectFollowingSectionText(table, tables[i + 1] || null, doc);
+    const payouts = extractPayouts(followingText || fullText);
     prevTable = table;
     while (raceNumber && usedRaceNumbers.has(raceNumber)) raceNumber = null; // 誤検出で重複した場合はフォールバック
     if (!raceNumber) {
@@ -465,6 +546,7 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
       venue,
       raceNumber,
       order,
+      payouts,
       parsedAt: new Date().toISOString(),
     });
   }
@@ -525,11 +607,34 @@ function parseResultHtml(html, referenceDate = new Date()) {
   };
 }
 
+/**
+ * 貼り付けられたHTMLが「出走表」か「結果」かを自動判定する。
+ * 両方のパーサーを試し、着順(rank)が複数選手にわたってしっかり取れていれば結果、
+ * 得点(score)が複数選手で取れていれば出走表と判定する。どちらも取れなければ'unknown'。
+ * @returns {'racecard'|'result'|'unknown'}
+ */
+function detectPageType(html, referenceDate = new Date()) {
+  const cardRaces = parseRaceCardsFromPage(html, referenceDate);
+  const resultRaces = parseResultsFromPage(html, referenceDate);
+
+  const hasStrongResult = resultRaces.some((r) => r.order.length >= 2);
+  const cardHasScore = cardRaces.some((r) => r.players.filter((p) => p.score != null).length >= 2);
+  const hasStrongCard = cardRaces.some((r) => r.players.length >= 2) && cardHasScore;
+
+  if (hasStrongResult && !hasStrongCard) return 'result';
+  if (hasStrongCard && !hasStrongResult) return 'racecard';
+  if (hasStrongResult && hasStrongCard) return cardHasScore ? 'racecard' : 'result';
+  if (resultRaces.some((r) => r.order.length > 0)) return 'result';
+  if (cardRaces.some((r) => r.players.length > 0)) return 'racecard';
+  return 'unknown';
+}
+
 if (typeof window !== 'undefined') {
   window.KeirinParser = {
     parseRaceCardHtml,
     parseRaceCardsFromPage,
     parseResultHtml,
+    detectPageType,
     parseResultsFromPage,
     normalizeText,
   };

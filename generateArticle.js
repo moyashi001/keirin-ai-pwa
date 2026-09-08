@@ -54,15 +54,22 @@ function rankedPlayers(race) {
   return [...race.players].sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
 }
 
+/** レース名(例: 松戸競輪 5R（A級準決勝）)。旧データ(raceName未保存)にもフォールバックする */
+function raceTitle(race) {
+  const base = race.raceName || `${race.venue}競輪 ${race.raceNumber ?? '?'}R`;
+  return race.raceClass ? `${base}（${race.raceClass}）` : base;
+}
+
 /** レース1件分のnote記事(詳細版)を生成する */
 function generateRaceArticle(race, seed = 0) {
   const ranked = rankedPlayers(race);
   const honmei = ranked[0];
   const taikou = ranked[1];
   const ana = ranked.find((p, i) => i >= 2 && p.expectedValue != null && p.expectedValue >= 1.0) || ranked[2];
+  const predictions = race.predictions || (window.KeirinBetting ? window.KeirinBetting.buildPredictions(race.players) : null);
 
   const dateStr = race.date || '';
-  const title = `【${dateStr}】${race.venue}競輪 第${race.raceNumber || '?'}R AI予想`;
+  const title = `【${dateStr}】${raceTitle(race)} AI予想`;
 
   const lines = [];
   lines.push(`■ ${title}`);
@@ -86,11 +93,24 @@ function generateRaceArticle(race, seed = 0) {
   );
   lines.push('');
   lines.push('【推奨買い目】');
-  if (honmei && taikou) {
-    lines.push(`・2車複 ${honmei.number}-${taikou.number}`);
-    lines.push(`・ワイド ${honmei.number}-${taikou.number}`);
-    if (ana && ana.number !== honmei.number && ana.number !== taikou.number) {
-      lines.push(`・3連複 ${honmei.number}-${taikou.number}-${ana.number}`);
+  if (predictions) {
+    if (predictions.win && predictions.win.length) {
+      lines.push(`・単勝 ${predictions.win[0].number}`);
+    }
+    if (predictions.quinella && predictions.quinella.length) {
+      lines.push(`・2車複 ${predictions.quinella[0].combo.join('-')}`);
+    }
+    if (predictions.exacta && predictions.exacta.length) {
+      lines.push(`・2車単 ${predictions.exacta[0].order.join('-')}`);
+    }
+    if (predictions.wide && predictions.wide.length) {
+      lines.push(`・ワイド ${predictions.wide.map((c) => c.combo.join('-')).join(' , ')}`);
+    }
+    if (predictions.trio && predictions.trio.length) {
+      lines.push(`・3連複 ${predictions.trio[0].combo.join('-')}`);
+    }
+    if (predictions.trifecta && predictions.trifecta.length) {
+      lines.push(`・3連単 ${predictions.trifecta[0].order.join('-')}`);
     }
   } else {
     lines.push('データ不足のため買い目の自動生成を見送りました。');
@@ -125,7 +145,7 @@ function generateSummaryArticle(races, seed = 0) {
       const honmei = ranked[0];
       const mark = race.recommended ? '🔥おすすめ' : '';
       lines.push(
-        `第${race.raceNumber || '?'}R（${race.venue}）${mark}　本命：${honmei ? `${honmei.number} ${honmei.name}` : '―'}` +
+        `${raceTitle(race)}${mark}　本命：${honmei ? `${honmei.number} ${honmei.name}` : '―'}` +
           `（勝率${formatPercent(honmei && honmei.winRate)} / 期待値${honmei && honmei.expectedValue != null ? honmei.expectedValue : '―'}）`
       );
     });

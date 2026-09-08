@@ -4,10 +4,11 @@
  *
  * データ取得はURLフェッチではなく、ユーザーがiPhone Safari上のブックマークレットで
  * ページのHTMLをコピーし、テキストエリアに貼り付けて「解析する」ボタンを押す方式。
- *  - 「予想」タブ: 翌日の出走表ページのHTMLを貼り付け → AI推論して次回表示するレースとして保存
- *  - 「回収率」タブ: 当日の結果ページのHTMLを貼り付け → 前回保存済みの予想と突き合わせて回収率を計算
- * 1回の貼り付けで複数レース分のテーブルが含まれていても、含まれていなくても
- * どちらでも解析できるようにパーサー側で対応している。
+ * 貼り付けられたHTMLが「出走表」か「結果」かは htmlParser.detectPageType が自動判定し、
+ *  - 出走表と判定: AI推論して次回表示するレースとして保存(翌日の予想)
+ *  - 結果と判定  : 前回保存済みの予想と突き合わせて回収率を計算
+ * にそれぞれ振り分ける。1回の貼り付けで複数レース分のテーブルが含まれていても、
+ * 含まれていなくてもどちらでも解析できるようパーサー側で対応している。
  */
 
 (function () {
@@ -28,13 +29,6 @@
 
   function setStatus(msg, isError = false) {
     const el = $('#upload-status');
-    if (!el) return;
-    el.textContent = msg;
-    el.classList.toggle('error', isError);
-  }
-
-  function setResultStatus(msg, isError = false) {
-    const el = $('#result-status');
     if (!el) return;
     el.textContent = msg;
     el.classList.toggle('error', isError);
@@ -77,74 +71,93 @@
     $$('.tab-btn').forEach((b) => b.classList.remove('active'));
   }
 
-  /** 「予想」タブ: 貼り付けられた出走表HTMLを解析してAI推論・保存する */
-  async function handleParseRaceCardHtml() {
-    const textarea = $('#race-card-html-input');
+  /** レースオブジェクトを保存用の形に整える(members/odds/predictionsのエイリアスを付与) */
+  function finalizeRaceForStorage(race) {
+    const oddsMap = {};
+    race.players.forEach((p) => {
+      if (p.odds != null) oddsMap[p.number] = p.odds;
+    });
+    return {
+      ...race,
+      raceId: race.raceKey,
+      members: race.players,
+      odds: oddsMap,
+      predictions: window.KeirinBetting.buildPredictions(race.players),
+    };
+  }
+
+  /** 貼り付けられたHTMLを解析し、出走表/結果を自動判定して処理する */
+  async function handleParseHtml() {
+    const textarea = $('#html-input');
     const html = textarea.value.trim();
     if (!html) {
-      setStatus('出走表のHTMLを貼り付けてください。', true);
+      setStatus('HTMLを貼り付けてください。', true);
       return;
     }
+
     try {
-      setStatus('解析中...');
-      const races = window.KeirinParser.parseRaceCardsFromPage(html);
-      if (races.length === 0) {
-        setStatus('選手情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      setStatus('HTMLの種別を判定中...');
+      const pageType = window.KeirinParser.detectPageType(html);
+
+      if (pageType === 'racecard') {
+        await handleRaceCard(html);
+      } else if (pageType === 'result') {
+        await handleResult(html);
+      } else {
+        setStatus('出走表・結果のどちらとしても認識できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
         return;
       }
-      setStatus(`${races.length}レース分を検出。AI推論を実行中...`);
-      const predicted = await window.KeirinModel.predictRaces(races);
-      await window.KeirinDB.saveRaces(predicted);
-      await loadAllRaces();
-      setStatus(`翌日${predicted.length}レース分を予想しました。`);
       textarea.value = '';
-      switchTab('races');
-      $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
     } catch (err) {
       console.error(err);
       setStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
     }
   }
 
-  /** 「回収率」タブ: 貼り付けられた結果HTMLを解析し、前回の予想と突き合わせて回収率を計算する */
-  async function handleParseResultHtml() {
-    const textarea = $('#result-html-input');
-    const html = textarea.value.trim();
-    if (!html) {
-      setResultStatus('結果のHTMLを貼り付けてください。', true);
+  /** 出走表として解析: AI推論して次回表示するレースとして保存する */
+  async function handleRaceCard(html) {
+    const races = window.KeirinParser.parseRaceCardsFromPage(html);
+    if (races.length === 0) {
+      setStatus('選手情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
       return;
     }
-    try {
-      setResultStatus('解析中...');
-      const results = window.KeirinParser.parseResultsFromPage(html);
-      if (results.length === 0) {
-        setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
-        return;
-      }
-      const resultDate = results[0].date;
-      const todaysRaces = state.races.filter((r) => r.date === resultDate);
-      if (todaysRaces.length === 0) {
-        setResultStatus(`${resultDate}分の予想データが見つかりませんでした。`, true);
-        return;
-      }
-      const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
-      await window.KeirinDB.saveDailyLog(log);
-      await window.KeirinDB.clearRacesByDate(resultDate);
-      await loadAllRaces();
-      setResultStatus(`${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録しました。`);
-      textarea.value = '';
-      renderResultsView();
-    } catch (err) {
-      console.error(err);
-      setResultStatus('解析中にエラーが発生しました。貼り付けたHTMLの内容をご確認ください。', true);
+    setStatus(`出走表と判定。${races.length}レース分を検出、AI推論を実行中...`);
+    const predicted = await window.KeirinModel.predictRaces(races);
+    const finalized = predicted.map(finalizeRaceForStorage);
+    await window.KeirinDB.saveRaces(finalized);
+    await loadAllRaces();
+    setStatus(`翌日${finalized.length}レース分を予想しました。`);
+    switchTab('races');
+    $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
+  }
+
+  /** 結果として解析: 前回保存済みの予想と突き合わせて回収率を計算する */
+  async function handleResult(html) {
+    const results = window.KeirinParser.parseResultsFromPage(html);
+    if (results.length === 0) {
+      setStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      return;
     }
+    const resultDate = results[0].date;
+    const todaysRaces = state.races.filter((r) => r.date === resultDate);
+    if (todaysRaces.length === 0) {
+      setStatus(`結果と判定されましたが、${resultDate}分の予想データが見つかりませんでした。`, true);
+      return;
+    }
+    const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
+    await window.KeirinDB.saveDailyLog(log);
+    await window.KeirinDB.clearRacesByDate(resultDate);
+    await loadAllRaces();
+    setStatus(`結果と判定。${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録しました。`);
+    switchTab('results');
+    $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'results'));
   }
 
   async function renderResultsView() {
     const logs = await window.KeirinDB.getAllDailyLogs();
     const container = $('#log-list');
     if (logs.length === 0) {
-      container.innerHTML = '<p class="empty-msg">まだ回収率ログがありません。上に本日の結果ページのHTMLを貼り付けて集計してください。</p>';
+      container.innerHTML = '<p class="empty-msg">まだ回収率ログがありません。「予想」タブで本日の結果ページのHTMLを貼り付けて集計してください。</p>';
     } else {
       container.innerHTML = logs
         .slice()
@@ -211,8 +224,7 @@
       switchTab('races');
       $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
     });
-    $('#parse-race-card-btn').addEventListener('click', handleParseRaceCardHtml);
-    $('#parse-result-btn').addEventListener('click', handleParseResultHtml);
+    $('#parse-html-btn').addEventListener('click', handleParseHtml);
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
     $('#copy-article-btn').addEventListener('click', handleCopyArticle);
   }

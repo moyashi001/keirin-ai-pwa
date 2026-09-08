@@ -19,16 +19,17 @@
     </header>
 
     <main>
-      <!-- 出走表HTMLを貼り付けて翌日の予想を生成 -->
+      <!-- HTMLを貼り付けて解析(出走表/結果を自動判定) -->
       <section id="view-upload" class="view active">
         <div class="panel">
-          <h2>翌日の出走表を解析</h2>
+          <h2>HTMLを貼り付けて解析</h2>
           <p class="hint">
-            iPhoneのSafariで翌日の出走表ページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
+            iPhoneのSafariで出走表または結果のページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
+            出走表・結果のどちらを貼り付けたかは自動で判定します（出走表→翌日の予想を生成／結果→本日の回収率を集計）。
             1レース分でも、複数レース分がまとまったページでもそのまま解析できます。
           </p>
-          <textarea id="race-card-html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
-          <button id="parse-race-card-btn" class="primary-btn">解析する</button>
+          <textarea id="html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
+          <button id="parse-html-btn" class="primary-btn">解析する</button>
           <p id="upload-status" class="status-msg"></p>
         </div>
       </section>
@@ -49,14 +50,7 @@
       <!-- 回収率 -->
       <section id="view-results" class="view">
         <div class="panel">
-          <h2>本日の結果を解析</h2>
-          <p class="hint">
-            iPhoneのSafariで本日の結果ページを開き、ブックマークレットでページのHTMLをコピーして、下のテキストエリアに貼り付けてください。
-            前回保存した予想と自動的に突き合わせて回収率を計算します。
-          </p>
-          <textarea id="result-html-input" class="html-textarea" rows="8" placeholder="ここにHTMLを貼り付けてください"></textarea>
-          <button id="parse-result-btn" class="primary-btn">集計する</button>
-          <p id="result-status" class="status-msg"></p>
+          <p class="hint">「予想」タブで本日の結果ページのHTMLを貼り付けると、自動判定されてここに回収率が集計されます。</p>
         </div>
         <div class="panel">
           <h2>回収率の推移</h2>
