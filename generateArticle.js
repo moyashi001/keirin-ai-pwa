@@ -92,25 +92,16 @@ function generateRaceArticle(race, seed = 0) {
       `本レースの本命は期待値${honmei && honmei.expectedValue != null ? honmei.expectedValue : '算出不可（オッズ未取得）'}。`
   );
   lines.push('');
-  lines.push('【推奨買い目】');
-  if (predictions) {
-    if (predictions.win && predictions.win.length) {
-      lines.push(`・単勝 ${predictions.win[0].number}`);
+  lines.push('【推奨買い目(ワイド)】');
+  if (predictions && (predictions.honmei || (predictions.nakaana && predictions.nakaana.length))) {
+    if (predictions.honmei) {
+      lines.push(`・本命 ${predictions.honmei.combo.join('-')}（${predictions.honmei.names.join('/')}）`);
     }
-    if (predictions.quinella && predictions.quinella.length) {
-      lines.push(`・2車複 ${predictions.quinella[0].combo.join('-')}`);
+    if (predictions.nakaana && predictions.nakaana.length) {
+      lines.push(`・中穴 ${predictions.nakaana.map((c) => c.combo.join('-')).join(' , ')}`);
     }
-    if (predictions.exacta && predictions.exacta.length) {
-      lines.push(`・2車単 ${predictions.exacta[0].order.join('-')}`);
-    }
-    if (predictions.wide && predictions.wide.length) {
-      lines.push(`・ワイド ${predictions.wide.map((c) => c.combo.join('-')).join(' , ')}`);
-    }
-    if (predictions.trio && predictions.trio.length) {
-      lines.push(`・3連複 ${predictions.trio[0].combo.join('-')}`);
-    }
-    if (predictions.trifecta && predictions.trifecta.length) {
-      lines.push(`・3連単 ${predictions.trifecta[0].order.join('-')}`);
+    if (predictions.ooana && predictions.ooana.length) {
+      lines.push(`・大穴 ${predictions.ooana.map((c) => c.combo.join('-')).join(' , ')}`);
     }
   } else {
     lines.push('データ不足のため買い目の自動生成を見送りました。');

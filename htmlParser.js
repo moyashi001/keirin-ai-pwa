@@ -73,6 +73,100 @@ function detectRaceNumber(fullText) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * KEIRIN.JPの「投票選択」ページ(/sp/voteselect)専用の抽出ロジック。
+ * このページは選手情報がテーブルではなく <script> 内の JS変数 mainOzzData に
+ * JSON形式で埋め込まれている(通常のテーブル走査では選手を検出できない)。
+ * ブックマークレットでコピーしやすい画面のため、直接対応しておく。
+ */
+function extractMainOzzData(html) {
+  const m = html.match(/mainOzzData\s*=\s*(\{[\s\S]*?\});/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** KEIRIN.JPの脚質表記(逃/追/両)をPWA内の表記(逃げ/差し/両方)に変換する */
+function mapKyakusitu(kyakusitu) {
+  if (kyakusitu === '逃') return '逃げ';
+  if (kyakusitu === '追') return '差し';
+  if (kyakusitu === '両') return '両方';
+  return null;
+}
+
+/**
+ * mainOzzData(KEIRIN.JP投票選択ページのJSONデータ)から、その日の全レース分の
+ * 出走表相当データを組み立てる。このページには競走得点・オッズが無いため、
+ * 3連単支持率(sanRentanSijiRituInfoList、人気度合いの目安)を疑似オッズとして使う。
+ * 疑似オッズ = 100 / 支持率(%) とし、支持率が高い(人気)ほど値が小さくなるようにする。
+ */
+function buildRacesFromOzzData(data, referenceDate = new Date()) {
+  if (!data || !Array.isArray(data.zenSensyuInfoList)) return [];
+
+  const venueMap = new Map();
+  (data.raceInfoList || []).forEach((info) => {
+    venueMap.set(`${info.kaisaiDate}_${info.innerKeirinjyoCode}`, info.keirinjyoName);
+  });
+
+  const sijiMap = new Map();
+  (data.sanRentanSijiInfoList || []).forEach((entry) => {
+    const key = `${entry.kaisaiDate}_${entry.innerKeirinjyoCode}_${entry.raceNo}`;
+    const byNumber = new Map((entry.sanRentanSijiRituInfoList || []).map((s) => [Number(s.syaban), parseFloat(s.sijiLitu)]));
+    sijiMap.set(key, byNumber);
+  });
+
+  const races = [];
+  for (const entry of data.zenSensyuInfoList) {
+    const { kaisaiDate, innerKeirinjyoCode, raceNo, sensyuInfoList } = entry;
+    if (!sensyuInfoList || sensyuInfoList.length === 0) continue;
+
+    const dateLabel = /^\d{8}$/.test(String(kaisaiDate))
+      ? `${String(kaisaiDate).slice(0, 4)}-${String(kaisaiDate).slice(4, 6)}-${String(kaisaiDate).slice(6, 8)}`
+      : detectDateLabel(String(kaisaiDate), referenceDate);
+    const venue = venueMap.get(`${kaisaiDate}_${innerKeirinjyoCode}`) || '不明会場';
+    const raceNumber = Number(raceNo);
+    const raceSiji = sijiMap.get(`${kaisaiDate}_${innerKeirinjyoCode}_${raceNo}`) || new Map();
+
+    const players = sensyuInfoList.map((s) => {
+      const number = Number(s.syaban);
+      const supportRate = raceSiji.get(number);
+      return {
+        number,
+        name: normalizeText(s.sensyuName).replace(/\s+/g, ''),
+        score: null, // 投票選択ページには競走得点が無い
+        style: mapKyakusitu(s.kyakusitu),
+        odds: supportRate != null && supportRate > 0 ? Number((100 / supportRate).toFixed(2)) : null,
+        recentResults: null,
+      };
+    });
+
+    // ライン構成の情報は無いため、車番順に2人ずつまとめる簡易フォールバックを使う
+    const numbers = players.map((p) => p.number).sort((a, b) => a - b);
+    const lines = [];
+    for (let i = 0; i < numbers.length; i += 2) lines.push(numbers.slice(i, i + 2));
+
+    const raceKey = `${dateLabel}_${venue}_${raceNumber}`;
+    races.push({
+      raceKey,
+      raceId: raceKey,
+      raceName: buildRaceName(venue, raceNumber),
+      raceClass: null,
+      startTime: null, // 投票選択ページには発走時刻が無い
+      date: dateLabel,
+      venue,
+      raceNumber,
+      bankNote: null,
+      lines,
+      players,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+  return races;
+}
+
 /** 発走時刻(例: 17:05 / 17時05分)を検出する */
 function detectStartTime(fullText) {
   const m = fullText.match(/(\d{1,2})[:時](\d{2})分?/);
@@ -442,6 +536,14 @@ function buildPlayersFromTable(table, fullText, oddsMap) {
  * @returns {object[]} parseRaceCardHtml() と同じ形のレースオブジェクトの配列
  */
 function parseRaceCardsFromPage(html, referenceDate = new Date()) {
+  // KEIRIN.JPの投票選択ページ(mainOzzDataを含む)は、選手情報がテーブルではなく
+  // JS変数に埋め込まれているため、まずこちらを優先的に試す。
+  const ozzData = extractMainOzzData(html);
+  if (ozzData) {
+    const ozzRaces = buildRacesFromOzzData(ozzData, referenceDate);
+    if (ozzRaces.length > 0) return ozzRaces;
+  }
+
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const playerTables = findPlayerTables(doc);
 
@@ -631,6 +733,11 @@ function parseResultHtml(html, referenceDate = new Date()) {
  * @returns {'racecard'|'result'|'unknown'}
  */
 function detectPageType(html, referenceDate = new Date()) {
+  // KEIRIN.JPの投票選択ページ(mainOzzData)は得点・オッズが無く、通常の判定基準
+  // (score/oddsの充足度)に乗らないため、検出できた時点で確定で出走表とみなす。
+  const ozzData = extractMainOzzData(html);
+  if (ozzData && buildRacesFromOzzData(ozzData, referenceDate).length > 0) return 'racecard';
+
   const cardRaces = parseRaceCardsFromPage(html, referenceDate);
   const resultRaces = parseResultsFromPage(html, referenceDate);
 

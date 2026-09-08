@@ -76,39 +76,22 @@ function comboLabel(numbers) {
   return (numbers || []).join('-');
 }
 
-/** 券種別のAIおすすめ買い方をまとめて表示するセクションを組み立てる */
+/** 本命・中穴・大穴の3階層ワイド買い目をまとめて表示するセクションを組み立てる */
 function renderPredictions(predictions) {
   if (!predictions) return '<p class="empty-msg">買い目データがありません。</p>';
 
   const rows = [];
 
-  if (predictions.win && predictions.win.length) {
-    const p = predictions.win[0];
-    rows.push({ label: '単勝', value: `${p.number} ${escapeHtml(p.name)}`, sub: `勝率 ${(p.winRate * 100).toFixed(1)}%` });
+  if (predictions.honmei) {
+    rows.push({ label: '本命', value: `${comboLabel(predictions.honmei.combo)}（${predictions.honmei.names.join(' / ')}）`, sub: 'ワイド1点' });
   }
-  if (predictions.place && predictions.place.length) {
-    const names = predictions.place.map((p) => `${p.number} ${escapeHtml(p.name)}`).join(' / ');
-    rows.push({ label: '複勝', value: names, sub: '' });
+  if (predictions.nakaana && predictions.nakaana.length) {
+    const value = predictions.nakaana.map((c) => comboLabel(c.combo)).join(' , ');
+    rows.push({ label: '中穴', value, sub: `ワイド${predictions.nakaana.length}点` });
   }
-  if (predictions.quinella && predictions.quinella.length) {
-    const c = predictions.quinella[0];
-    rows.push({ label: '二車複', value: comboLabel(c.combo), sub: `スコア ${c.score}` });
-  }
-  if (predictions.exacta && predictions.exacta.length) {
-    const c = predictions.exacta[0];
-    rows.push({ label: '二車単', value: comboLabel(c.order), sub: `スコア ${c.score}` });
-  }
-  if (predictions.wide && predictions.wide.length) {
-    const combos = predictions.wide.map((c) => comboLabel(c.combo)).join(' , ');
-    rows.push({ label: 'ワイド', value: combos, sub: '' });
-  }
-  if (predictions.trio && predictions.trio.length) {
-    const c = predictions.trio[0];
-    rows.push({ label: '三連複', value: comboLabel(c.combo), sub: `スコア ${c.score}` });
-  }
-  if (predictions.trifecta && predictions.trifecta.length) {
-    const c = predictions.trifecta[0];
-    rows.push({ label: '三連単', value: comboLabel(c.order), sub: `スコア ${c.score}` });
+  if (predictions.ooana && predictions.ooana.length) {
+    const value = predictions.ooana.map((c) => comboLabel(c.combo)).join(' , ');
+    rows.push({ label: '大穴', value, sub: `ワイド${predictions.ooana.length}点` });
   }
 
   if (rows.length === 0) return '<p class="empty-msg">買い目データがありません。</p>';

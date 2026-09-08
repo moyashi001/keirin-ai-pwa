@@ -1,146 +1,52 @@
 /**
  * components/betting.js
- * ①券種ごとのAIおすすめ買い方の生成(毎日の結果から学習した選手データで強化)、
+ * ①「本命・中穴・大穴」3階層のワイド買い目の生成(毎日の結果から学習した選手データで強化)、
  * ②おすすめレースの単勝買い目自動生成・的中判定・回収率計算をまとめたモジュール。
+ *
+ * 買い目は券種をワイドのみに統一している。
+ *  - 本命: AI推奨度が最も高い選手(軸)と、軸との連対率が最も高い相手のワイド(1点)
+ *  - 中穴: 軸と、中位人気(2〜4番人気)の相手とのワイド(最大2点)
+ *  - 大穴: 軸と、人気薄(オッズが高い)相手とのワイド(最大3点)
  */
 
-/** 選手が2着になる確率の近似値(連対率から勝率を引いたもの、負値は0に丸める) */
-function secondPlaceProb(p) {
-  return Math.max(0, (p.placeRate || 0) - (p.winRate || 0));
+/** 軸選手と相手選手のワイド1点分のエントリを組み立てる */
+function buildWideEntry(axis, partner) {
+  if (!axis || !partner) return null;
+  return {
+    combo: [axis.number, partner.number],
+    names: [axis.name, partner.name],
+    odds: axis.odds != null && partner.odds != null ? Number((axis.odds + partner.odds).toFixed(1)) : null,
+  };
 }
 
 /**
- * 選手の3連対率(3着以内に入る確率)を解決する。
- * riders学習データ(db.js)にshowRateがあればそれを優先し、無ければ連対率から回帰的に近似する。
+ * AI推論結果(勝率・連対率・オッズ)を使って、本命・中穴・大穴の3階層でワイドのおすすめ買い方を生成する。
+ * @param {object[]} players winRate/placeRate/aiScore/oddsを持つ選手配列
+ * @returns {{honmei: object|null, nakaana: object[], ooana: object[]}}
  */
-function resolveShowRate(p, riderMap) {
-  const rider = riderMap && window.KeirinDB ? riderMap.get(window.KeirinDB.buildRiderId(p.name)) : null;
-  if (rider && rider.showRate != null) return rider.showRate;
-  return Math.min(0.99, (p.placeRate || 0) * 1.25 + 0.05);
-}
-
-/** 選手が3着になる確率の近似値(3連対率から連対率を引いたもの、負値は0に丸める) */
-function thirdPlaceProb(p, riderMap) {
-  return Math.max(0, resolveShowRate(p, riderMap) - (p.placeRate || 0));
-}
-
-/** 2名が同じライン(race.linesの同じ配列)に属しているかどうか */
-function isSameLine(numberA, numberB, lines) {
-  return (lines || []).some((l) => l.includes(numberA) && l.includes(numberB));
-}
-
-/** 配列から重複無しでn個選ぶ組み合わせを列挙する(順不同) */
-function combinations(arr, n) {
-  if (n === 0) return [[]];
-  if (arr.length < n) return [];
-  const [first, ...rest] = arr;
-  const withFirst = combinations(rest, n - 1).map((c) => [first, ...c]);
-  const withoutFirst = combinations(rest, n);
-  return [...withFirst, ...withoutFirst];
-}
-
-/**
- * AI推論結果(勝率・連対率・期待値)を使って、券種ごとのおすすめ買い方を生成する。
- * @param {object[]} players winRate/placeRate/expectedValue/oddsを持つ選手配列
- * @param {{riderMap?: Map<string,object>, lines?: number[][]}} [options]
- *   riderMap: db.getRiderMap()の結果(3連対率など学習データで買い目を強化する)
- *   lines: レースのライン構成(二車複のライン相性判定に使う)
- * @returns {{win:object[], place:object[], quinella:object[], exacta:object[], wide:object[], trio:object[], trifecta:object[]}}
- */
-function buildPredictions(players, options = {}) {
-  const { riderMap, lines } = options;
+function buildPredictions(players) {
   const valid = (players || []).filter((p) => p.number != null);
-  if (valid.length === 0) {
-    return { win: [], place: [], quinella: [], exacta: [], wide: [], trio: [], trifecta: [] };
+  if (valid.length < 2) {
+    return { honmei: null, nakaana: [], ooana: [] };
   }
 
-  const winScore = (p) => (p.winRate || 0) * (p.odds || 1);
-  const placeScore = (p) => (p.placeRate || 0) * (p.odds || 1);
+  const axis = [...valid].sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))[0];
+  const others = valid.filter((p) => p.number !== axis.number);
 
-  const byWinScore = [...valid].sort((a, b) => winScore(b) - winScore(a));
-  const byPlaceScore = [...valid].sort((a, b) => placeScore(b) - placeScore(a));
-  const byPlaceRate = [...valid].sort((a, b) => (b.placeRate || 0) - (a.placeRate || 0));
+  const byPlaceRate = [...others].sort((a, b) => (b.placeRate || 0) - (a.placeRate || 0));
+  const byOddsAsc = [...others].filter((p) => p.odds != null).sort((a, b) => a.odds - b.odds); // 人気順(オッズ低い順)
+  const byOddsDesc = [...others].filter((p) => p.odds != null).sort((a, b) => b.odds - a.odds); // 穴順(オッズ高い順)
 
-  // 単勝: 勝率 × オッズ が最も高い選手
-  const win = byWinScore.slice(0, 1).map((p) => ({
-    number: p.number,
-    name: p.name,
-    winRate: p.winRate,
-    score: Number(winScore(p).toFixed(3)),
-  }));
+  // 本命: 軸 + 連対率が最も高い相手のワイド1点
+  const honmei = buildWideEntry(axis, byPlaceRate[0]);
 
-  // 複勝: 連対率 × オッズ が高い上位2名
-  const place = byPlaceScore.slice(0, 2).map((p) => ({
-    number: p.number,
-    name: p.name,
-    placeRate: p.placeRate,
-    score: Number(placeScore(p).toFixed(3)),
-  }));
+  // 中穴: 軸 + 2〜4番人気(中位人気)の相手とのワイド最大2点
+  const nakaana = byOddsAsc.slice(1, 4).slice(0, 2).map((p) => buildWideEntry(axis, p)).filter(Boolean);
 
-  // ワイド: 連対率が高い組み合わせ(上位3名から2名の組を作り、連対率の積が高い順)
-  const wideTop = byPlaceRate.slice(0, 3);
-  const wide = combinations(wideTop, 2)
-    .map((combo) => ({
-      combo: combo.map((p) => p.number),
-      names: combo.map((p) => p.name),
-      score: Number(combo.reduce((acc, p) => acc * (p.placeRate || 0), 1).toFixed(4)),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 2);
+  // 大穴: 軸 + 人気薄(オッズが高い順)の相手とのワイド最大3点
+  const ooana = byOddsDesc.slice(0, 3).map((p) => buildWideEntry(axis, p)).filter(Boolean);
 
-  // 二車複: 連対率 × ライン相性(同じラインなら1.3倍のボーナス)が高い組み合わせ
-  const quinellaCandidates = combinations([...valid].sort((a, b) => (b.placeRate || 0) - (a.placeRate || 0)).slice(0, 4), 2).map(
-    (combo) => {
-      const lineBonus = isSameLine(combo[0].number, combo[1].number, lines) ? 1.3 : 1.0;
-      const score = combo.reduce((acc, p) => acc * (p.placeRate || 0), 1) * lineBonus;
-      return { combo: combo.map((p) => p.number), names: combo.map((p) => p.name), score: Number(score.toFixed(4)) };
-    }
-  );
-  quinellaCandidates.sort((a, b) => b.score - a.score);
-  const quinella = quinellaCandidates.slice(0, 1);
-
-  // 二車単: 勝率 × 2着率 × オッズ が最も高い並びを採用
-  const exactaCandidates = [];
-  for (const a of valid) {
-    for (const b of valid) {
-      if (a.number === b.number) continue;
-      const score = (a.winRate || 0) * secondPlaceProb(b) * (a.odds || 1);
-      exactaCandidates.push({ order: [a.number, b.number], names: [a.name, b.name], score });
-    }
-  }
-  exactaCandidates.sort((a, b) => b.score - a.score);
-  const exacta = exactaCandidates.slice(0, 2).map((c) => ({ ...c, score: Number(c.score.toFixed(3)) }));
-
-  // 三連複: 連対率上位3名の組み合わせ(積が高い)
-  const trioTop = byPlaceRate.slice(0, 3);
-  const trio =
-    trioTop.length === 3
-      ? [
-          {
-            combo: trioTop.map((p) => p.number),
-            names: trioTop.map((p) => p.name),
-            score: Number(trioTop.reduce((acc, p) => acc * (p.placeRate || 0), 1).toFixed(4)),
-          },
-        ]
-      : [];
-
-  // 三連単: 勝率 × 2着率 × 3着率 × オッズ が最も高い並びを採用(上位候補から探索)
-  const trifectaTop = [...valid].sort((a, b) => winScore(b) - winScore(a)).slice(0, 5);
-  const trifectaCandidates = [];
-  for (const a of trifectaTop) {
-    for (const b of trifectaTop) {
-      if (b.number === a.number) continue;
-      for (const c of trifectaTop) {
-        if (c.number === a.number || c.number === b.number) continue;
-        const score = (a.winRate || 0) * secondPlaceProb(b) * thirdPlaceProb(c, riderMap) * (a.odds || 1);
-        trifectaCandidates.push({ order: [a.number, b.number, c.number], names: [a.name, b.name, c.name], score });
-      }
-    }
-  }
-  trifectaCandidates.sort((x, y) => y.score - x.score);
-  const trifecta = trifectaCandidates.slice(0, 1).map((c) => ({ ...c, score: Number(c.score.toFixed(4)) }));
-
-  return { win, place, quinella, exacta, wide, trio, trifecta };
+  return { honmei, nakaana, ooana };
 }
 
 /** オッズ×的中確率(期待値)で全選手をランキング化する */
