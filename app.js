@@ -325,6 +325,15 @@
     renderRacesView();
 
     if ('serviceWorker' in navigator) {
+      // 新しいService Workerが有効になった瞬間にページを自動リロードする。
+      // これが無いと、アプリを開きっぱなしにしている間はコードを更新しても
+      // (キャッシュ自体は新しくなっても)実行中のJSは古いバージョンのまま動き続けてしまう。
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading) return;
+        reloading = true;
+        window.location.reload();
+      });
       try {
         await navigator.serviceWorker.register('service-worker.js');
       } catch (err) {
