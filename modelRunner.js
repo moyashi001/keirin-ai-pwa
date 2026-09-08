@@ -18,6 +18,12 @@
 let ortSession = null;
 let ortLoadAttempted = false;
 
+// 「AIおすすめ」リボンの判定基準。当たりやすさ(勝率)と儲けやすさ(期待値)の
+// 両方を満たすレースだけを厳選する。競輪は7〜9車立てが基本のため、均等なら
+// 1人あたりの勝率は11〜14%程度。その倍以上ある30%を「明確な本命」の目安とする。
+const RECOMMEND_WIN_RATE_THRESHOLD = 0.3;
+const RECOMMEND_EXPECTED_VALUE_THRESHOLD = 1.0;
+
 /** レース内で各選手の独立勝率を合計1になるよう正規化する */
 function normalizeToDistribution(values) {
   const sum = values.reduce((a, b) => a + b, 0);
@@ -172,14 +178,18 @@ async function predictRace(race, riderMap) {
 
   resultPlayers.sort((a, b) => b.aiScore - a.aiScore);
 
-  const recommended = resultPlayers.length > 0 && (resultPlayers[0].expectedValue == null || resultPlayers[0].expectedValue >= 1.0);
+  const top = resultPlayers[0];
+  const recommended =
+    !!top &&
+    top.winRate >= RECOMMEND_WIN_RATE_THRESHOLD &&
+    (top.expectedValue == null || top.expectedValue >= RECOMMEND_EXPECTED_VALUE_THRESHOLD);
 
   return {
     ...race,
     players: resultPlayers,
     inferenceEngine: usedOnnx ? 'onnx' : 'rule-based',
     recommended,
-    recommendScore: resultPlayers.length ? resultPlayers[0].aiScore : 0,
+    recommendScore: top ? top.aiScore : 0,
     predictedAt: new Date().toISOString(),
   };
 }
