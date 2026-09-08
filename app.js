@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v17';
+  const APP_VERSION = 'v18';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -331,9 +331,14 @@
   /** 日次ログ1件分の、レースごとの当たり外れ・払戻し内訳を組み立てる(単勝100円購入の想定) */
   function renderLogBets(bets) {
     if (!bets || bets.length === 0) return '';
+    // 過去に保存された回収率ログ(並び順修正より前に計算されたもの)も正しい順序で
+    // 表示できるよう、保存されている並び順に関わらず表示時に競輪場ごと・1〜12R順へ並べ直す
+    const sorted = [...bets].sort(
+      (a, b) => (a.venue || '').localeCompare(b.venue || '', 'ja') || (a.raceNumber || 0) - (b.raceNumber || 0)
+    );
     return `
       <div class="log-bets">
-        ${bets
+        ${sorted
           .map((bet) => {
             const state = !bet.judged ? 'unjudged' : bet.hit ? 'hit' : 'miss';
             const resultText = !bet.judged ? '未判定' : bet.hit ? `的中 +${bet.payout}円` : '外れ';
