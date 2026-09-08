@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v19';
+  const APP_VERSION = 'v20';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -209,11 +209,6 @@
 
     try {
       setStatus('出走表を解析中...');
-      const pageType = window.KeirinParser.detectPageType(html);
-      if (pageType === 'result') {
-        setStatus('結果ページのHTMLのようです。結果は「回収率」タブに貼り付けてください。', true);
-        return;
-      }
       await handleRaceCard(html);
       textarea.value = '';
     } catch (err) {
@@ -240,11 +235,6 @@
 
     try {
       setResultStatus('結果を解析中...');
-      const pageType = window.KeirinParser.detectPageType(html);
-      if (pageType === 'racecard') {
-        setResultStatus('出走表ページのHTMLのようです。出走表は「予想」タブに貼り付けてください。', true);
-        return;
-      }
       await handleResult(html);
       textarea.value = '';
     } catch (err) {
@@ -257,7 +247,15 @@
   async function handleRaceCard(html) {
     const races = window.KeirinParser.parseRaceCardsFromPage(html);
     if (races.length === 0) {
-      setStatus('選手情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      // 出走表として抽出できなかった場合、結果ページとしてなら読み取れるか調べて案内する
+      // (KEIRIN.JPの「開催情報」ページは出走表・結果が同居しているため、
+      // 出走表側の抽出に失敗した時だけこちらを確認すればよい)
+      const results = window.KeirinParser.parseResultsFromPage(html);
+      if (results.some((r) => r.order.length > 0)) {
+        setStatus('結果ページのHTMLのようです。結果は「回収率」タブに貼り付けてください。', true);
+      } else {
+        setStatus('選手情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      }
       return;
     }
     setStatus(`出走表と判定。${races.length}レース分を検出、AI推論を実行中...`);
@@ -305,7 +303,13 @@
   async function handleResult(html) {
     const results = window.KeirinParser.parseResultsFromPage(html);
     if (results.length === 0) {
-      setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      // 結果として抽出できなかった場合、出走表としてなら読み取れるか調べて案内する
+      const races = window.KeirinParser.parseRaceCardsFromPage(html);
+      if (races.some((r) => r.players.length > 0)) {
+        setResultStatus('出走表ページのHTMLのようです。出走表は「予想」タブに貼り付けてください。', true);
+      } else {
+        setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
+      }
       return;
     }
     const resultDate = results[0].date;

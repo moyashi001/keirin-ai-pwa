@@ -192,6 +192,69 @@ function buildRacesFromOzzData(data, referenceDate = new Date()) {
   return races;
 }
 
+/**
+ * KEIRIN.JPの「開催情報」ページ(/sp/race、出走表一覧タブ)専用の抽出ロジック。
+ * このページは<script>内のJS変数(jsonData['SJ0305'])に選手情報がJSON形式で
+ * 埋め込まれている。同じページに結果一覧(jsonData['SJ0306']相当のテーブル)も
+ * 同居しているため、通常のテーブル走査だと結果テーブルまで出走表として誤って
+ * 拾ってしまう(1行に3名分のセルが並ぶ構造のため、先頭の1名しか取れない上に
+ * 結果テーブルの行まで選手行と誤認する)。JSON側を直接使うことでこれを避ける。
+ */
+function extractSJ0305Data(html) {
+  const m = html.match(/jsonData\['SJ0305'\]\s*=\s*(\{[\s\S]*?\});/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** jsonData['SJ0305'](開催情報ページの出走表一覧)から、レース単位の出走表を組み立てる */
+function buildRaceCardsFromSJ0305Data(data, fullText, referenceDate = new Date()) {
+  if (!data || !Array.isArray(data.rInfo) || data.rInfo.length === 0) return [];
+
+  const dateLabel = detectDateLabel(fullText, referenceDate);
+  const venue = detectVenue(fullText);
+
+  const races = [];
+  for (const race of data.rInfo) {
+    const players = (race.sInfo || [])
+      .filter((s) => s.syaban != null && s.senName)
+      .map((s) => ({
+        number: Number(s.syaban),
+        name: normalizeText(s.senName).replace(/\s+/g, ''),
+        score: null, // このページには競走得点が無い
+        style: null,
+        odds: null,
+        recentResults: null,
+      }));
+    if (players.length === 0) continue;
+
+    const numbers = players.map((p) => p.number).sort((a, b) => a - b);
+    const lines = [];
+    for (let i = 0; i < numbers.length; i += 2) lines.push(numbers.slice(i, i + 2));
+
+    const raceNumber = Number(race.raceNo);
+    const raceKey = `${dateLabel}_${venue}_${raceNumber}`;
+    races.push({
+      raceKey,
+      raceId: raceKey,
+      raceName: buildRaceName(venue, raceNumber),
+      raceClass: race.syumoku || null,
+      startTime: race.stTime || null,
+      date: dateLabel,
+      venue,
+      raceNumber,
+      bankNote: null,
+      lines,
+      players,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+  return races;
+}
+
 /** 発走時刻(例: 17:05 / 17時05分)を検出する */
 function detectStartTime(fullText) {
   const m = fullText.match(/(\d{1,2})[:時](\d{2})分?/);
@@ -572,6 +635,16 @@ function parseRaceCardsFromPage(html, referenceDate = new Date()) {
   if (ozzData) {
     const ozzRaces = buildRacesFromOzzData(ozzData, referenceDate);
     if (ozzRaces.length > 0) return ozzRaces;
+  }
+
+  // KEIRIN.JPの「開催情報」ページ(jsonData['SJ0305']を含む)も同様にJS変数優先で解析する。
+  // 結果一覧が同じページに同居しているため、通常のテーブル走査だと誤って
+  // 結果テーブルまで出走表として拾ってしまう。
+  const sj0305Data = extractSJ0305Data(html);
+  if (sj0305Data) {
+    const fullTextForSj = normalizeText(new DOMParser().parseFromString(html, 'text/html').body?.textContent || html);
+    const sjRaces = buildRaceCardsFromSJ0305Data(sj0305Data, fullTextForSj, referenceDate);
+    if (sjRaces.length > 0) return sjRaces;
   }
 
   const doc = new DOMParser().parseFromString(html, 'text/html');
