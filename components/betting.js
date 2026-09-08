@@ -168,62 +168,78 @@ function buildCompatibilityNotes(players, riderMap) {
   return notes;
 }
 
-/** おすすめレースの買い目(単勝100円)を生成する */
-function generateBetsForRace(race) {
-  const ranked = [...race.players].sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
-  const honmei = ranked[0];
-  if (!honmei) return null;
-  return {
+/**
+ * おすすめレースの買い目(ワイド100円×本命/中穴/大穴)を生成する。
+ * 「AIおすすめ買い方」(buildPredictions)で提示している組み合わせをそのまま
+ * 回収率集計の対象にする(単勝ではなく実際に提案しているワイドで判定するため)。
+ */
+function generateWideBetsForRace(race) {
+  const predictions = race.predictions;
+  if (!predictions) return [];
+
+  const entries = [];
+  if (predictions.honmei) entries.push({ ...predictions.honmei, category: '本命' });
+  (predictions.nakaana || []).forEach((c) => entries.push({ ...c, category: '中穴' }));
+  (predictions.ooana || []).forEach((c) => entries.push({ ...c, category: '大穴' }));
+
+  return entries.map((entry) => ({
     raceKey: race.raceKey,
     date: race.date,
     venue: race.venue,
     raceNumber: race.raceNumber,
-    betType: '単勝',
-    targetNumber: honmei.number,
-    targetName: honmei.name,
+    betType: 'ワイド',
+    category: entry.category,
+    combo: entry.combo,
+    names: entry.names || null,
     stake: 100,
-    odds: honmei.odds,
-  };
+    odds: entry.odds,
+  }));
 }
 
 /**
- * 結果データ(parseResultHtmlの出力)と買い目から的中/払戻を判定する。
- * @param {object} bet generateBetsForRace()の出力
- * @param {object} result parseResultHtmlの出力 { order: [{number, rank}, ...] }
+ * 結果データ(parseResultsFromPageの出力)とワイド買い目から的中/払戻を判定する。
+ * ワイドは組み合わせの2車がどちらも3着以内に入れば的中。
+ * @param {object} bet generateWideBetsForRace()の出力1件分
+ * @param {object} result parseResultsFromPageの出力 { order: [{number, rank}, ...], payouts }
  */
-function judgeBet(bet, result) {
+function judgeWideBet(bet, result) {
   if (!bet || !result || !result.order || result.order.length === 0) {
     return { ...bet, judged: false, hit: null, payout: 0 };
   }
-  const winner = result.order.find((o) => o.rank === 1);
-  const hit = !!winner && winner.number === bet.targetNumber;
+  const top3 = new Set(result.order.filter((o) => o.rank <= 3).map((o) => o.number));
+  const hit = (bet.combo || []).length === 2 && bet.combo.every((n) => top3.has(n));
   let payout = 0;
   if (hit) {
-    // 結果ページから実際の単勝払戻し額が取れていればそれを優先し、無ければオッズから概算する
-    const actualPayout = result.payouts && result.payouts.win;
-    if (actualPayout && String(actualPayout.combo) === String(bet.targetNumber)) {
-      payout = actualPayout.amount;
-    } else if (bet.odds != null) {
-      payout = Math.round(bet.odds * bet.stake);
-    } else {
-      payout = bet.stake;
+    // 結果ページに実際のワイド払戻し額があればそれを優先し、無ければ推定オッズから概算する
+    // (KEIRIN.JPの結果ページは通常2車単・3連単のみ掲載でワイドが無いことが多い)
+    const actualPayout = result.payouts && result.payouts.wide;
+    const comboKey = [...bet.combo].sort((a, b) => a - b).join('-');
+    if (actualPayout) {
+      const actualCombo = String(actualPayout.combo)
+        .split(/[-‐=]/)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .join('-');
+      if (actualCombo === comboKey) payout = actualPayout.amount;
     }
+    if (!payout) payout = bet.odds != null ? Math.round(bet.odds * bet.stake) : bet.stake;
   }
-  return { ...bet, judged: true, hit, payout, actualWinner: winner || null };
+  return { ...bet, judged: true, hit, payout };
 }
 
 /**
- * 1日分のレース群から日次回収率を計算する。
+ * 1日分のレース群から日次回収率を計算する。おすすめレースごとに「AIおすすめ買い方」の
+ * ワイド(本命/中穴/大穴、最大6点)を1点100円で購入した想定で集計する。
  * @param {object[]} races その日のおすすめレース(推論済み)
  * @param {object[]} results 対応する結果データの配列(raceKeyで突合)
  */
 function computeDailyRecovery(date, races, results) {
   const resultMap = new Map(results.map((r) => [r.raceKey, r]));
   const recommendedRaces = races.filter((r) => r.recommended);
-  const bets = recommendedRaces.map((race) => {
-    const bet = generateBetsForRace(race);
+  const bets = recommendedRaces.flatMap((race) => {
+    const raceBets = generateWideBetsForRace(race);
     const result = resultMap.get(race.raceKey);
-    return result ? judgeBet(bet, result) : { ...bet, judged: false, hit: null, payout: 0 };
+    return raceBets.map((bet) => (result ? judgeWideBet(bet, result) : { ...bet, judged: false, hit: null, payout: 0 }));
   });
 
   const judgedBets = bets.filter((b) => b.judged);
@@ -252,8 +268,8 @@ if (typeof window !== 'undefined') {
     buildRaceStrategy,
     detectStyleChanges,
     buildCompatibilityNotes,
-    generateBetsForRace,
-    judgeBet,
+    generateWideBetsForRace,
+    judgeWideBet,
     computeDailyRecovery,
   };
 }

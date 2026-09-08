@@ -141,6 +141,9 @@ main {
   gap: 8px;
   padding: 4px 2px 0;
 }
+.date-filter-wrap[hidden] {
+  display: none;
+}
 .date-filter-wrap label {
   font-size: 11.5px;
   color: var(--text-dim);

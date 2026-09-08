@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v15';
+  const APP_VERSION = 'v16';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -115,7 +115,8 @@
     select.innerHTML =
       `<option value="__all__"${state.selectedVenue === '__all__' ? ' selected' : ''}>すべての競輪場</option>` +
       venues.map((v) => `<option value="${v}"${v === state.selectedVenue ? ' selected' : ''}>${v}</option>`).join('');
-    select.parentElement.hidden = venues.length <= 1;
+    // 会場が1つしか無くても実際の会場名を確認できるよう、常に表示する(日付フィルタとは異なり隠さない)
+    select.parentElement.hidden = venues.length === 0;
   }
 
   function renderRacesView() {
@@ -331,10 +332,12 @@
           .map((bet) => {
             const state = !bet.judged ? 'unjudged' : bet.hit ? 'hit' : 'miss';
             const resultText = !bet.judged ? '未判定' : bet.hit ? `的中 +${bet.payout}円` : '外れ';
+            const comboLabel = (bet.combo || []).join('-');
+            const namesLabel = bet.names && bet.names.length ? `（${bet.names.join('/')}）` : '';
             return `
           <div class="log-bet-row ${state}">
             <span class="bet-race">${bet.venue ?? ''} ${bet.raceNumber ?? '?'}R</span>
-            <span class="bet-target">${bet.targetNumber ?? '-'} ${bet.targetName ?? ''}（単勝100円）</span>
+            <span class="bet-target">${bet.category ?? ''} ${comboLabel}${namesLabel}（ワイド100円）</span>
             <span class="bet-result">${resultText}</span>
           </div>`;
           })
