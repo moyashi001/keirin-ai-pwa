@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# 学習パイプラインの中間生成物(サイズが大きい/再取得・再生成可能なため管理外)
+training/raw_keirin_data.csv
+training/features.csv

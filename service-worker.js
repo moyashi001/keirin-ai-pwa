@@ -9,7 +9,7 @@
  * 配信され続けてしまう。
  */
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE_NAME = `keirin-ai-cache-${VERSION}`;
 
 const CORE_ASSETS = [
@@ -18,6 +18,7 @@ const CORE_ASSETS = [
   './styles.css',
   './app.js',
   './modelRunner.js',
+  './featureBuilder.js',
   './htmlParser.js',
   './generateArticle.js',
   './db.js',
@@ -32,7 +33,7 @@ const CORE_ASSETS = [
   './vendor/ort/ort-wasm-simd.wasm',
 ];
 
-const OPTIONAL_ASSETS = ['./assets/model.onnx'];
+const OPTIONAL_ASSETS = ['./assets/keirin_model.onnx'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

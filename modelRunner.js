@@ -2,93 +2,96 @@
  * modelRunner.js
  * ONNX Runtime Web を使ったブラウザ内AI推論。
  *
- * assets/model.onnx が配置されていればそれをロードして推論に使う。
- * 配置されていない場合(標準状態)は、内蔵のルールベース推論エンジンに
- * 自動フォールバックする。特徴量ベクトルの並びを揃えてあるため、
- * 将来ユーザーが学習済みモデルを assets/model.onnx として置き換えるだけで
- * そのまま本物のONNX推論に切り替わる設計になっている。
+ * training/ 以下のPythonパイプラインで学習したLightGBMモデルを
+ * assets/keirin_model.onnx としてONNX変換して配置している。
+ * 特徴量の組み立ては featureBuilder.js が担当し、この並び順が
+ * 学習時(training/build_features.py の FEATURE_COLUMNS)と一致している必要がある。
+ *
+ * assets/keirin_model.onnx が読み込めない場合(未配置・読み込み失敗)は、
+ * 同じ特徴量を使った軽量なルールベース推論に自動フォールバックする。
  */
-
-const FEATURE_NAMES = ['scoreNorm', 'styleNige', 'styleMakuri', 'styleSashi', 'lineAdvantage', 'recentFormNorm', 'oddsPopularity'];
 
 let ortSession = null;
 let ortLoadAttempted = false;
 
-function styleOneHot(style) {
-  return {
-    styleNige: style === '逃げ' ? 1 : 0,
-    styleMakuri: style === 'まくり' ? 1 : 0,
-    styleSashi: style === '差し' ? 1 : 0,
-  };
+/** レース内で各選手の独立勝率を合計1になるよう正規化する */
+function normalizeToDistribution(values) {
+  const sum = values.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return values.map(() => 1 / values.length);
+  return values.map((v) => v / sum);
 }
 
-/** 直近成績文字列("1-2-3-1"など)を0〜1の好調度スコアへ変換 */
-function recentFormScore(recentResults) {
-  if (!recentResults) return 0.5;
-  const ranks = recentResults.split('-').map(Number).filter((n) => !isNaN(n));
-  if (ranks.length === 0) return 0.5;
-  const avg = ranks.reduce((a, b) => a + b, 0) / ranks.length;
-  // 1着平均→1.0、6着平均→0.0 目安の線形マップ
-  return Math.max(0, Math.min(1, (6 - avg) / 5));
+/** assets/keirin_model.onnx のロードを一度だけ試みる。無ければ null のまま。 */
+async function tryLoadOnnxModel() {
+  if (ortLoadAttempted) return ortSession;
+  ortLoadAttempted = true;
+  if (typeof ort === 'undefined') return null;
+  try {
+    ort.env.wasm.wasmPaths = 'vendor/ort/';
+    const res = await fetch('assets/keirin_model.onnx', { method: 'HEAD' });
+    if (!res.ok) return null;
+    ortSession = await ort.InferenceSession.create('assets/keirin_model.onnx', { executionProviders: ['wasm'] });
+    console.info('[modelRunner] assets/keirin_model.onnx をロードしました。LightGBM(ONNX)推論モードで動作します。');
+  } catch (err) {
+    console.warn('[modelRunner] ONNXモデルのロードに失敗、ルールベース推論にフォールバックします。', err);
+    ortSession = null;
+  }
+  return ortSession;
 }
 
-/** ライン内でのポジション優位度(先頭・番手は有利、単騎はやや不利) */
-function lineAdvantageScore(player, lines) {
-  const line = (lines || []).find((l) => l.includes(player.number));
-  if (!line || line.length <= 1) return 0.4; // 単騎
-  const pos = line.indexOf(player.number);
-  if (pos === 0) return 0.9; // 先頭
-  if (pos === 1) return 0.75; // 番手
-  return 0.55; // 三番手以降
+/**
+ * ONNX推論を実行し、各選手の「1着になる確率」を返す。
+ * LightGBM(convert_to_onnx.py, zipmap=False)の出力は
+ * ['label', 'probabilities'] で、probabilities は [N, 2] (0:負け, 1:1着)。
+ */
+async function runOnnxInference(session, vectors) {
+  const inputName = session.inputNames[0];
+  const n = vectors.length;
+  const dim = vectors[0].length;
+  const flat = new Float32Array(n * dim);
+  vectors.forEach((row, i) => row.forEach((v, j) => (flat[i * dim + j] = v)));
+  const tensor = new ort.Tensor('float32', flat, [n, dim]);
+  const outputMap = await session.run({ [inputName]: tensor });
+
+  const probOutput = outputMap['probabilities'] || outputMap[session.outputNames[session.outputNames.length - 1]];
+  const data = probOutput.data;
+  const outDim = probOutput.dims[probOutput.dims.length - 1];
+  const winProbs = [];
+  for (let i = 0; i < n; i++) {
+    winProbs.push(data[i * outDim + (outDim - 1)]); // 最後の列 = 1着(is_win=1)クラスの確率
+  }
+  return winProbs;
 }
 
-/** オッズの人気度を0〜1へ(オッズが低いほど人気=高スコア) */
-function oddsPopularityScore(odds) {
-  if (odds == null || odds <= 0) return 0.3;
-  // オッズ1.5倍→約0.9、オッズ20倍→約0.1 の目安カーブ
-  return Math.max(0.02, Math.min(0.95, 1 / (1 + odds / 4)));
-}
-
-function buildFeatures(race) {
-  const scores = race.players.map((p) => p.score).filter((s) => s != null);
-  const minScore = scores.length ? Math.min(...scores) : 60;
-  const maxScore = scores.length ? Math.max(...scores) : 120;
-  const range = Math.max(1, maxScore - minScore);
-
-  return race.players.map((p) => {
-    const scoreNorm = p.score != null ? (p.score - minScore) / range : 0.5;
-    const { styleNige, styleMakuri, styleSashi } = styleOneHot(p.style);
-    const lineAdvantage = lineAdvantageScore(p, race.lines);
-    const recentFormNorm = recentFormScore(p.recentResults);
-    const oddsPopularity = oddsPopularityScore(p.odds);
-    return {
-      player: p,
-      vector: [scoreNorm, styleNige, styleMakuri, styleSashi, lineAdvantage, recentFormNorm, oddsPopularity],
-    };
-  });
-}
-
-/** ルールベース推論エンジン(デフォルト)。重みは経験則に基づく簡易モデル。 */
+/** ルールベース推論エンジン(ONNXモデル未配置時のフォールバック)。特徴量はfeatureBuilder.jsと同じもの。 */
 const RULE_WEIGHTS = {
-  scoreNorm: 2.2,
+  scoreNorm: 2.0,
   styleNige: 0.3,
-  styleMakuri: 0.5,
-  styleSashi: 0.35,
-  lineAdvantage: 1.4,
-  recentFormNorm: 1.1,
-  oddsPopularity: 0.9,
+  styleOikomi: 0.2,
+  styleRyo: 0.1,
+  recentRankBonus: 1.3, // 平均着順が良い(小さい)ほど加点
+  recentNigeRate: 0.4,
+  recentMakuriRate: 0.5,
+  recentSashiRate: 0.35,
+  rankPositionBonus: 1.2, // 予想印/オッズ順位が良い(小さい)ほど加点
 };
 
 function ruleBasedLogits(vector) {
-  const [scoreNorm, styleNige, styleMakuri, styleSashi, lineAdvantage, recentFormNorm, oddsPopularity] = vector;
+  const [raceScore, styleNige, styleOikomi, styleRyo, recentAvgRank, nigeRate, makuriRate, sashiRate, rankPosition] = vector;
+  const scoreNorm = Math.max(0, Math.min(1, (raceScore - 60) / 60));
+  const recentRankBonus = Math.max(0, (9 - recentAvgRank) / 9);
+  const rankPositionBonus = Math.max(0, (8 - rankPosition) / 7);
+
   return (
     scoreNorm * RULE_WEIGHTS.scoreNorm +
     styleNige * RULE_WEIGHTS.styleNige +
-    styleMakuri * RULE_WEIGHTS.styleMakuri +
-    styleSashi * RULE_WEIGHTS.styleSashi +
-    lineAdvantage * RULE_WEIGHTS.lineAdvantage +
-    recentFormNorm * RULE_WEIGHTS.recentFormNorm +
-    oddsPopularity * RULE_WEIGHTS.oddsPopularity
+    styleOikomi * RULE_WEIGHTS.styleOikomi +
+    styleRyo * RULE_WEIGHTS.styleRyo +
+    recentRankBonus * RULE_WEIGHTS.recentRankBonus +
+    nigeRate * RULE_WEIGHTS.recentNigeRate +
+    makuriRate * RULE_WEIGHTS.recentMakuriRate +
+    sashiRate * RULE_WEIGHTS.recentSashiRate +
+    rankPositionBonus * RULE_WEIGHTS.rankPositionBonus
   );
 }
 
@@ -99,65 +102,33 @@ function softmax(logits) {
   return exps.map((v) => v / sum);
 }
 
-/** assets/model.onnx のロードを一度だけ試みる。無ければ null のまま。 */
-async function tryLoadOnnxModel() {
-  if (ortLoadAttempted) return ortSession;
-  ortLoadAttempted = true;
-  if (typeof ort === 'undefined') return null;
-  try {
-    ort.env.wasm.wasmPaths = 'vendor/ort/';
-    const res = await fetch('assets/model.onnx', { method: 'HEAD' });
-    if (!res.ok) return null;
-    ortSession = await ort.InferenceSession.create('assets/model.onnx', { executionProviders: ['wasm'] });
-    console.info('[modelRunner] assets/model.onnx をロードしました。ONNX推論モードで動作します。');
-  } catch (err) {
-    console.warn('[modelRunner] ONNXモデルのロードに失敗、ルールベース推論にフォールバックします。', err);
-    ortSession = null;
-  }
-  return ortSession;
-}
-
-async function runOnnxInference(session, featureRows) {
-  const inputName = session.inputNames[0];
-  const n = featureRows.length;
-  const dim = FEATURE_NAMES.length;
-  const flat = new Float32Array(n * dim);
-  featureRows.forEach((row, i) => row.vector.forEach((v, j) => (flat[i * dim + j] = v)));
-  const tensor = new ort.Tensor('float32', flat, [n, dim]);
-  const feeds = { [inputName]: tensor };
-  const outputMap = await session.run(feeds);
-  const outputName = session.outputNames[0];
-  const data = outputMap[outputName].data;
-  // モデル出力をレース内でsoftmax正規化して勝率とみなす
-  return softmax(Array.from(data).slice(0, n));
-}
-
 /**
  * レース1件分の推論を実行し、各選手に winRate / placeRate / expectedValue / aiScore を付与する。
  * @param {object} race parseRaceCardHtml() の出力
  * @returns {Promise<object>} 推論結果を付与したレースオブジェクト
  */
 async function predictRace(race) {
-  const featureRows = buildFeatures(race);
+  const { vectors, players } = window.KeirinFeatureBuilder.buildFeatureMatrix(race);
   const session = await tryLoadOnnxModel();
 
   let winRates;
   let usedOnnx = false;
   if (session) {
     try {
-      winRates = await runOnnxInference(session, featureRows);
+      const rawProbs = await runOnnxInference(session, vectors);
+      winRates = normalizeToDistribution(rawProbs);
       usedOnnx = true;
     } catch (err) {
       console.warn('[modelRunner] ONNX推論に失敗、ルールベースにフォールバックします。', err);
     }
   }
   if (!winRates) {
-    const logits = featureRows.map((r) => ruleBasedLogits(r.vector));
+    const logits = vectors.map(ruleBasedLogits);
     winRates = softmax(logits);
   }
 
-  // データ充実度(得点・オッズ・脚質が揃っているほど信頼度が高い)
-  const completeness = featureRows.map(({ player }) => {
+  // データ充実度(得点・オッズ・脚質・直近成績が揃っているほど信頼度が高い)
+  const completeness = players.map((player) => {
     let filled = 0;
     if (player.score != null) filled++;
     if (player.odds != null) filled++;
@@ -166,9 +137,8 @@ async function predictRace(race) {
     return filled / 4;
   });
 
-  const players = featureRows.map(({ player }, i) => {
+  const resultPlayers = players.map((player, i) => {
     const winRate = winRates[i];
-    // 連対率は勝率に「上位3割の底上げ」を加えた回帰的な推定値
     const placeRate = Math.min(0.98, winRate * 1.9 + 0.08);
     const odds = player.odds != null ? player.odds : null;
     const expectedValue = odds != null ? Number((winRate * odds).toFixed(3)) : null;
@@ -184,16 +154,16 @@ async function predictRace(race) {
     };
   });
 
-  players.sort((a, b) => b.aiScore - a.aiScore);
+  resultPlayers.sort((a, b) => b.aiScore - a.aiScore);
 
-  const recommended = players.length > 0 && (players[0].expectedValue == null || players[0].expectedValue >= 1.0);
+  const recommended = resultPlayers.length > 0 && (resultPlayers[0].expectedValue == null || resultPlayers[0].expectedValue >= 1.0);
 
   return {
     ...race,
-    players,
+    players: resultPlayers,
     inferenceEngine: usedOnnx ? 'onnx' : 'rule-based',
     recommended,
-    recommendScore: players.length ? players[0].aiScore : 0,
+    recommendScore: resultPlayers.length ? resultPlayers[0].aiScore : 0,
     predictedAt: new Date().toISOString(),
   };
 }
@@ -207,5 +177,5 @@ async function predictRaces(races) {
 }
 
 if (typeof window !== 'undefined') {
-  window.KeirinModel = { predictRace, predictRaces, FEATURE_NAMES };
+  window.KeirinModel = { predictRace, predictRaces };
 }

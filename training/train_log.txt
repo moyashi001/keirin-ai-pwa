@@ -1,0 +1,33 @@
+C:\Users\tomot\AppData\Local\Programs\Python\Python312\Lib\site-packages\lightgbm\sklearn.py:1106: LGBMDeprecationWarning: The argument 'eval_set' is deprecated, use 'eval_X' and 'eval_y' instead.
+  eval_set = _validate_eval_set_Xy(eval_set=eval_set, eval_X=eval_X, eval_y=eval_y)
+train: (717218, 9), test: (179674, 9)
+train positive rate: 0.1413, test positive rate: 0.1180
+[LightGBM] [Info] Number of positive: 101319, number of negative: 615899
+[LightGBM] [Info] Auto-choosing row-wise multi-threading, the overhead of testing was 0.018571 seconds.
+You can set `force_row_wise=true` to remove the overhead.
+And if memory is not enough, you can set `force_col_wise=true`.
+[LightGBM] [Info] Total Bins 381
+[LightGBM] [Info] Number of data points in the train set: 717218, number of used features: 9
+[LightGBM] [Info] [binary:BoostFromScore]: pavg=0.141267 -> initscore=-1.804809
+[LightGBM] [Info] Start training from score -1.804809
+[50]	valid_0's auc: 0.760239	valid_0's binary_logloss: 0.319012
+[100]	valid_0's auc: 0.762232	valid_0's binary_logloss: 0.314983
+[150]	valid_0's auc: 0.763248	valid_0's binary_logloss: 0.314347
+[200]	valid_0's auc: 0.76394	valid_0's binary_logloss: 0.314089
+[250]	valid_0's auc: 0.764477	valid_0's binary_logloss: 0.313863
+[300]	valid_0's auc: 0.764879	valid_0's binary_logloss: 0.313646
+[350]	valid_0's auc: 0.765035	valid_0's binary_logloss: 0.313593
+[400]	valid_0's auc: 0.765125	valid_0's binary_logloss: 0.313589
+[evaluation] AUC = 0.7651, LogLoss = 0.3136
+[feature importance]
+race_score            4319
+recent_avg_rank       2875
+rank_position         1619
+recent_makuri_rate     799
+recent_sashi_rate      741
+recent_nige_rate       685
+style_oikomi           398
+style_nige             355
+style_ryo              179
+dtype: int32
+saved model to training/model.pkl
