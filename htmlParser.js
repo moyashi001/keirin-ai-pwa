@@ -87,7 +87,7 @@ function detectVenue(fullText) {
   // 連続した文言が本文中に無く、代わりにお知らせ欄の「詳しくは競輪トピックス」等の
   // 文言を誤って会場名として拾ってしまうことがあるため。
   let m = fullText.match(/"joName"\s*:\s*"([^"]+)"/);
-  if (m) return m[1];
+  if (m) return m[1].replace(/競輪場?$/, '');
 
   m = fullText.match(/([一-龥々ぁ-んァ-ヶー]{2,6}競輪)/);
   return m ? m[1].replace('競輪', '') : '不明会場';
@@ -638,12 +638,97 @@ function parseRaceCardsFromPage(html, referenceDate = new Date()) {
 }
 
 /**
+ * KEIRIN.JPのPC版「結果一覧」ページ(/pc/racelist)専用の抽出ロジック。
+ * このページも着順が<table>ではなく<script>内のJS変数(jsonData['PJ0306'])に
+ * JSON形式で埋め込まれており(SP版投票選択ページのmainOzzDataと同様の構造)、
+ * 通常のテーブル走査では着順を検出できない。
+ */
+function extractPcResultData(html) {
+  const m = html.match(/jsonData\['PJ0306'\]\s*=\s*(\{[\s\S]*?\});/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** PC版結果ページの決まり手(1文字表記: 差/捲/逃/マ 等)をPWA内の表記に変換する */
+function mapPcKimarite(k) {
+  if (!k) return null;
+  if (k.includes('逃')) return '逃げ';
+  if (k.includes('捲')) return 'まくり';
+  if (k.includes('差')) return '差し';
+  if (k.includes('マ')) return 'マーク';
+  return k;
+}
+
+/** 金額文字列(例: "1,240円")から数値を取り出す */
+function parseYen(s) {
+  const n = parseInt(String(s || '').replace(/[^\d]/g, ''), 10);
+  return isNaN(n) ? null : n;
+}
+
+/** jsonData['PJ0306'](PC版結果ページ)から、レース単位の結果配列を組み立てる */
+function buildResultsFromPcData(data, fullText, referenceDate = new Date()) {
+  if (!data || !Array.isArray(data.resultList) || data.resultList.length === 0) return [];
+
+  const dateLabel = detectDateLabel(fullText, referenceDate);
+  const venue = detectVenue(fullText);
+
+  const results = [];
+  for (const race of data.resultList) {
+    const raceNumber = detectRaceNumber(String(race.rclblRaceNo || ''));
+    const order = [];
+    ['tyakui1List', 'tyakui2List', 'tyakui3List'].forEach((key) => {
+      (race[key] || []).forEach((entry) => {
+        if (entry.rclblSyaban == null || !entry.rclblSensyuName) return;
+        order.push({
+          number: Number(entry.rclblSyaban),
+          name: normalizeText(entry.rclblSensyuName).replace(/\s+/g, ''),
+          rank: entry.rclblTyakui,
+          move: mapPcKimarite(entry.rclblKimari),
+        });
+      });
+    });
+    if (order.length === 0) continue;
+    order.sort((a, b) => a.rank - b.rank);
+
+    const payouts = {};
+    const exacta = (race.harai2syaList || [])[0];
+    if (exacta) payouts.exacta = { combo: exacta.kumi, amount: parseYen(exacta.kingaku) };
+    const trifecta = (race.harai3renList || [])[0];
+    if (trifecta) payouts.trifecta = { combo: trifecta.kumi, amount: parseYen(trifecta.kingaku) };
+
+    results.push({
+      raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+      date: dateLabel,
+      venue,
+      raceNumber,
+      order,
+      payouts,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+  return results;
+}
+
+/**
  * 結果ページ(1ページに複数レース分の着順表が並んでいることを想定)を
  * レース単位の結果配列に変換する。テーブルごとに1レース分の着順とみなし、
  * レース番号はテーブル直前の見出しテキストから推定する(推定できない場合は出現順の通し番号)。
  * @returns {Array<{raceKey:string, date:string, venue:string, raceNumber:number, order:object[]}>}
  */
 function parseResultsFromPage(html, referenceDate = new Date()) {
+  // KEIRIN.JPのPC版結果一覧ページ(jsonData['PJ0306']を含む)は、着順がテーブルではなく
+  // JS変数に埋め込まれているため、まずこちらを優先的に試す。
+  const pcData = extractPcResultData(html);
+  if (pcData) {
+    const fullTextForPc = normalizeText(new DOMParser().parseFromString(html, 'text/html').body?.textContent || html);
+    const pcResults = buildResultsFromPcData(pcData, fullTextForPc, referenceDate);
+    if (pcResults.length > 0) return pcResults;
+  }
+
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const fullText = normalizeText(doc.body ? doc.body.textContent : html);
   const dateLabel = detectDateLabel(fullText, referenceDate);
