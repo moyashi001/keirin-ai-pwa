@@ -1,7 +1,9 @@
 /**
  * components/raceCard.js
  * レース一覧・レース詳細のDOM生成を担当するレンダリング部品。
- * レース詳細は 1.レース名 → 2.発走時間 → 3.出走メンバー → 4.AIおすすめ買い方(券種別) → 5.オッズ の順に表示する。
+ * レース詳細は 1.レース名/発走時間 → 2.展開予想 → 3.荒れ度 → 4.買い方戦略 →
+ * 5.出走メンバー → 6.AIおすすめ買い方(券種別) → 7.期待値ランキング → 8.脚質変化 →
+ * 9.相性データ → 10.オッズ の順に表示する。
  */
 
 function escapeHtml(s) {
@@ -138,6 +140,84 @@ function renderOddsList(race) {
   `;
 }
 
+/** 展開予想(S-3) */
+function renderRaceFlow(raceFlow) {
+  if (!raceFlow) return '';
+  return `<div class="info-box">${escapeHtml(raceFlow)}</div>`;
+}
+
+/** 荒れ度(A-1) */
+function renderRaceRisk(raceRisk) {
+  if (!raceRisk) return '';
+  const stars = '★'.repeat(raceRisk.stars) + '☆'.repeat(5 - raceRisk.stars);
+  return `
+    <div class="info-box">
+      <div class="risk-row"><span class="risk-stars">${stars}</span><span class="risk-label">${escapeHtml(raceRisk.label)}</span></div>
+    </div>
+  `;
+}
+
+/** 買い方戦略(B-1) */
+function renderRaceStrategy(raceStrategy) {
+  if (!raceStrategy) return '';
+  return `<div class="info-box">${escapeHtml(raceStrategy)}</div>`;
+}
+
+/** 期待値ランキング(S-4) */
+function renderExpectedValueRanking(ranking) {
+  if (!ranking || ranking.length === 0) return '<p class="empty-msg">期待値データがありません。</p>';
+  return `
+    <div class="ranking-list">
+      ${ranking
+        .map(
+          (r, i) => `
+        <div class="ranking-row">
+          <span class="rank-no">${i + 1}</span>
+          <span>${r.number} ${escapeHtml(r.name)}</span>
+          <span class="ev-value">${r.expectedValue != null ? r.expectedValue : '-'}</span>
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+/** 脚質変化の検出結果(A-2) */
+function renderStyleChanges(styleChanges) {
+  if (!styleChanges || styleChanges.length === 0) return '<p class="empty-msg">脚質変化は検出されませんでした。</p>';
+  return `
+    <div class="change-list">
+      ${styleChanges
+        .map(
+          (c) => `
+        <div class="change-row">
+          <span>${c.number}番 ${escapeHtml(c.name)}</span>
+          <span>${escapeHtml(c.from)}<span class="arrow">→</span>${escapeHtml(c.to)}傾向に変化</span>
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+/** 選手相性データ(S-1) */
+function renderCompatibilityNotes(notes) {
+  if (!notes || notes.length === 0) return '<p class="empty-msg">相性データが不足しています。</p>';
+  return `
+    <div class="compat-list">
+      ${notes
+        .map(
+          (n) => `
+        <div class="compat-row">
+          <span>${n.number} ${escapeHtml(n.name)} × ${n.partnerNumber} ${escapeHtml(n.partnerName)}</span>
+          <span class="compat-rate">連対率 ${(n.placeRate * 100).toFixed(0)}%(${n.races}走)</span>
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
 function renderRaceDetail(race) {
   const ranked = [...race.players].sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
   const lineText = (race.lines || []).map((l) => l.join('-')).join(' / ') || '不明';
@@ -152,6 +232,15 @@ function renderRaceDetail(race) {
       <p class="detail-line">ライン構成: ${escapeHtml(lineText)}</p>
       ${race.bankNote ? `<p class="detail-line">バンク特性: ${escapeHtml(race.bankNote)}</p>` : ''}
     </div>
+
+    <h3 class="section-title">展開予想</h3>
+    ${renderRaceFlow(race.raceFlow)}
+
+    <h3 class="section-title">荒れ度</h3>
+    ${renderRaceRisk(race.raceRisk)}
+
+    <h3 class="section-title">買い方戦略</h3>
+    ${renderRaceStrategy(race.raceStrategy)}
 
     <h3 class="section-title">出走メンバー</h3>
     <div class="table-scroll">
@@ -168,6 +257,15 @@ function renderRaceDetail(race) {
 
     <h3 class="section-title">AIおすすめ買い方</h3>
     ${renderPredictions(race.predictions)}
+
+    <h3 class="section-title">期待値ランキング</h3>
+    ${renderExpectedValueRanking(race.expectedValueRanking)}
+
+    <h3 class="section-title">脚質変化</h3>
+    ${renderStyleChanges(race.styleChanges)}
+
+    <h3 class="section-title">相性データ</h3>
+    ${renderCompatibilityNotes(race.compatibilityNotes)}
 
     <h3 class="section-title">オッズ</h3>
     ${renderOddsList(race)}

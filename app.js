@@ -5,15 +5,20 @@
  * データ取得はURLフェッチではなく、ユーザーがiPhone Safari上のブックマークレットで
  * ページのHTMLをコピーし、テキストエリアに貼り付けて「解析する」ボタンを押す方式。
  * 貼り付けられたHTMLが「出走表」か「結果」かは htmlParser.detectPageType が自動判定し、
- *  - 出走表と判定: AI推論して次回表示するレースとして保存(翌日の予想)
- *  - 結果と判定  : 前回保存済みの予想と突き合わせて回収率を計算
+ *  - 出走表と判定: 選手ごとの学習データ(riders)で補強したAI推論を行い、荒れ度・展開予想・
+ *    買い方戦略・期待値ランキング・脚質変化・相性データを付与して次回表示するレースとして保存
+ *  - 結果と判定  : 前回保存済みの予想と突き合わせて回収率を計算し、選手の学習データ
+ *    (直近成績・相性)を更新したうえで、そのレースを「決着済み(settled)」にする(削除はしない)
  * にそれぞれ振り分ける。1回の貼り付けで複数レース分のテーブルが含まれていても、
  * 含まれていなくてもどちらでも解析できるようパーサー側で対応している。
+ * 決着済みのレースも削除せず保持するため、予想一覧では日付フィルタで過去の予想を
+ * 履歴として振り返ることができる(B-2)。
  */
 
 (function () {
   const state = {
-    races: [], // DB内の全レース(結果待ちの当日分+最新の翌日予想が一時的に混在し得る)
+    races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
+    selectedDate: null, // 予想一覧の日付フィルタで選択中の日付(nullなら「最新の未決着日」を自動表示)
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -38,19 +43,54 @@
     state.races = await window.KeirinDB.getAllRaces();
   }
 
-  /** 表示対象は常に「最新の予想日(=翌日予想)」のレース群だけに絞る */
-  function latestDateRaces() {
+  /** 未決着(=これから走る)レースの中で最新の予想日を返す */
+  function latestUnsettledDate() {
+    const unsettled = state.races.filter((r) => !r.settled);
+    if (unsettled.length === 0) return null;
+    return unsettled.reduce((max, r) => (r.date > max ? r.date : max), unsettled[0].date);
+  }
+
+  /** B-2: 予想一覧に表示する日付(降順)の一覧。フィルタのセレクトボックス用。 */
+  function availableDates() {
+    return [...new Set(state.races.map((r) => r.date))].sort().reverse();
+  }
+
+  /** 表示対象のレース群。selectedDateが指定されていればその日付、無ければ最新の未決着日。 */
+  function displayedRaces() {
     if (state.races.length === 0) return [];
-    const maxDate = state.races.reduce((max, r) => (r.date > max ? r.date : max), state.races[0].date);
+    const targetDate = state.selectedDate || latestUnsettledDate() || state.races[0].date;
     return state.races
-      .filter((r) => r.date === maxDate)
+      .filter((r) => r.date === targetDate)
       .sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0));
   }
 
+  /** 記事生成・買い目強化などは常に「最新の未決着日(=翌日予想)」を対象にする */
+  function latestDateRaces() {
+    const targetDate = latestUnsettledDate();
+    if (!targetDate) return [];
+    return state.races.filter((r) => r.date === targetDate).sort((a, b) => (a.raceNumber || 0) - (b.raceNumber || 0));
+  }
+
+  function renderDateFilter() {
+    const select = $('#race-date-filter');
+    if (!select) return;
+    const dates = availableDates();
+    const latest = latestUnsettledDate();
+    if (!state.selectedDate || !dates.includes(state.selectedDate)) {
+      state.selectedDate = latest || dates[0] || null;
+    }
+    select.innerHTML = dates
+      .map((d) => `<option value="${d}"${d === state.selectedDate ? ' selected' : ''}>${d}${d === latest ? '（予想）' : '（結果済み）'}</option>`)
+      .join('');
+    select.parentElement.hidden = dates.length <= 1;
+  }
+
   function renderRacesView() {
-    const races = latestDateRaces();
+    renderDateFilter();
+    const races = displayedRaces();
+    const isLatest = races[0] && !races[0].settled;
     $('#race-list').innerHTML = window.KeirinCards.renderRaceList(races);
-    $('#races-date-label').textContent = races[0] ? `翌日の予想 (${races[0].date})` : '';
+    $('#races-date-label').textContent = races[0] ? `${isLatest ? '翌日の予想' : '過去の予想'} (${races[0].date})` : '';
     $$('#race-list .race-card').forEach((card) => {
       card.addEventListener('click', () => showRaceDetail(card.dataset.raceKey));
     });
@@ -71,18 +111,29 @@
     $$('.tab-btn').forEach((b) => b.classList.remove('active'));
   }
 
-  /** レースオブジェクトを保存用の形に整える(members/odds/predictionsのエイリアスを付与) */
-  function finalizeRaceForStorage(race) {
+  /**
+   * レースオブジェクトを保存用の形に整える。
+   * members/odds/predictions に加え、荒れ度・展開予想・買い方戦略・期待値ランキング・
+   * 脚質変化・相性データ(共通仕様で追加された分析フィールド)を付与する。
+   */
+  function finalizeRaceForStorage(race, riderMap) {
     const oddsMap = {};
     race.players.forEach((p) => {
       if (p.odds != null) oddsMap[p.number] = p.odds;
     });
+    const raceRisk = window.KeirinBetting.buildRaceRisk(race.players, race.lines);
     return {
       ...race,
       raceId: race.raceKey,
       members: race.players,
       odds: oddsMap,
-      predictions: window.KeirinBetting.buildPredictions(race.players),
+      predictions: window.KeirinBetting.buildPredictions(race.players, { riderMap, lines: race.lines }),
+      expectedValueRanking: window.KeirinBetting.buildExpectedValueRanking(race.players),
+      raceRisk,
+      raceStrategy: window.KeirinBetting.buildRaceStrategy(raceRisk),
+      raceFlow: window.KeirinBetting.buildRaceFlow(race.players),
+      styleChanges: window.KeirinBetting.detectStyleChanges(race.players, riderMap),
+      compatibilityNotes: window.KeirinBetting.buildCompatibilityNotes(race.players, riderMap),
     };
   }
 
@@ -114,7 +165,7 @@
     }
   }
 
-  /** 出走表として解析: AI推論して次回表示するレースとして保存する */
+  /** 出走表として解析: 選手ごとの学習データで補強したAI推論を行い、次回表示するレースとして保存する */
   async function handleRaceCard(html) {
     const races = window.KeirinParser.parseRaceCardsFromPage(html);
     if (races.length === 0) {
@@ -122,8 +173,9 @@
       return;
     }
     setStatus(`出走表と判定。${races.length}レース分を検出、AI推論を実行中...`);
-    const predicted = await window.KeirinModel.predictRaces(races);
-    const finalized = predicted.map(finalizeRaceForStorage);
+    const riderMap = await window.KeirinDB.getRiderMap();
+    const predicted = await window.KeirinModel.predictRaces(races, riderMap);
+    const finalized = predicted.map((race) => finalizeRaceForStorage(race, riderMap));
     await window.KeirinDB.saveRaces(finalized);
     await loadAllRaces();
     setStatus(`翌日${finalized.length}レース分を予想しました。`);
@@ -131,7 +183,37 @@
     $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'races'));
   }
 
-  /** 結果として解析: 前回保存済みの予想と突き合わせて回収率を計算する */
+  /**
+   * 結果の着順・決まり手を、当日の出走表データ(ライン位置・得点)と突き合わせて
+   * 選手ごとの学習データ(riders)を更新する(直近5走をFIFOで維持し、勝率等を再計算)。
+   * あわせて選手同士の相性データ(pairStats)も更新する(S-1)。
+   */
+  async function updateRidersFromResults(todaysRaces, results) {
+    const raceMap = new Map(todaysRaces.map((r) => [r.raceKey, r]));
+    for (const result of results) {
+      const race = raceMap.get(result.raceKey);
+      const membersByNumber = new Map(((race && (race.members || race.players)) || []).map((p) => [p.number, p]));
+      for (const entry of result.order) {
+        const member = membersByNumber.get(entry.number);
+        const name = entry.name || (member && member.name);
+        if (!name) continue;
+        await window.KeirinDB.upsertRiderFromResult(
+          name,
+          {
+            rank: entry.rank,
+            move: entry.move || null,
+            line: member ? member.linePosition : null,
+            score: member ? member.score : null,
+            style: member ? member.style : null,
+          },
+          result.date
+        );
+      }
+      await window.KeirinDB.updatePairStats(result.order);
+    }
+  }
+
+  /** 結果として解析: 前回保存済みの予想と突き合わせて回収率を計算し、選手の学習データを更新する */
   async function handleResult(html) {
     const results = window.KeirinParser.parseResultsFromPage(html);
     if (results.length === 0) {
@@ -146,9 +228,10 @@
     }
     const log = window.KeirinBetting.computeDailyRecovery(resultDate, todaysRaces, results);
     await window.KeirinDB.saveDailyLog(log);
-    await window.KeirinDB.clearRacesByDate(resultDate);
+    await updateRidersFromResults(todaysRaces, results);
+    await window.KeirinDB.markRacesSettled(resultDate);
     await loadAllRaces();
-    setStatus(`結果と判定。${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録しました。`);
+    setStatus(`結果と判定。${resultDate}の回収率 ${log.recoveryRate ?? '-'}% を記録し、選手データを更新しました。`);
     switchTab('results');
     $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'results'));
   }
@@ -227,6 +310,13 @@
     $('#parse-html-btn').addEventListener('click', handleParseHtml);
     $('#generate-article-btn').addEventListener('click', handleGenerateArticle);
     $('#copy-article-btn').addEventListener('click', handleCopyArticle);
+    const dateFilter = $('#race-date-filter');
+    if (dateFilter) {
+      dateFilter.addEventListener('change', (e) => {
+        state.selectedDate = e.target.value;
+        renderRacesView();
+      });
+    }
   }
 
   async function init() {

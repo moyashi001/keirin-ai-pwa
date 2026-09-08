@@ -7,12 +7,17 @@
  *   [race_score, style_nige, style_oikomi, style_ryo,
  *    recent_avg_rank, recent_nige_rate, recent_makuri_rate, recent_sashi_rate,
  *    rank_position]
+ * 学習済みモデルの入力次元を変えると推論できなくなるため、特徴量の並び・個数は
+ * 固定のまま、各値の「精度」を db.js の riders ストア(毎日の結果から自己学習した
+ * 選手別成績)で補強する設計にしている。
  *
  * ■ 出走表HTMLだけでは再現できない特徴量について(重要)
  *   学習データには存在するが、競輪公式サイトの出走表からは取得できない情報が2つある。
- *   その場合は学習データ全体の平均値で代用する(FEATURE_DEFAULTS)。
- *     - recent_nige_rate / recent_makuri_rate / recent_sashi_rate:
- *       直近5走の「決まり手」は出走表に載らないため算出不可。
+ *   riders ストアにその選手の学習データがあればそれを優先し、無ければ学習データ
+ *   全体の平均値で代用する(FEATURE_DEFAULTS)。
+ *     - recent_avg_rank / recent_nige_rate / recent_makuri_rate / recent_sashi_rate:
+ *       直近5走の着順・決まり手は出走表に載らないため、riders ストアの
+ *       recentResults / recentMoves(毎日の結果解析で蓄積)があればそちらを使う。
  *     - rank_position:
  *       学習データでは記者の予想印(◎○注×△▲)の順位を「レース内の有力度順位」として
  *       使ったが、出走表に予想印は無い。そのため意味の近い代理指標として、
@@ -79,18 +84,43 @@ function computeOddsRankMap(players) {
   return map;
 }
 
+/** riderの学習データ(recentMoves配列)から決まり手の出現率を計算する */
+function moveRatesFromHistory(recentMoves) {
+  const moves = (recentMoves || []).filter(Boolean);
+  const n = moves.length;
+  if (n === 0) return null;
+  const count = (label) => moves.filter((m) => m === label).length / n;
+  return {
+    nige: count('逃げ'),
+    makuri: count('まくり'),
+    sashi: count('差し'),
+  };
+}
+
 /**
  * レース1件分の選手配列から、学習済みモデルへ入力する特徴量行列を作る。
  * @param {object} race parseRaceCardHtml() の出力(players配列を含む)
+ * @param {Map<string,object>} [riderMap] db.getRiderMap()の結果。あれば選手ごとの
+ *   学習データ(直近5走の着順・決まり手・得点)で特徴量の精度を補強する。
  * @returns {{ vectors: number[][], players: object[] }} FEATURE_COLUMNS順に並んだ特徴量ベクトルの配列
  */
-function buildFeatureMatrix(race) {
+function buildFeatureMatrix(race, riderMap) {
   const oddsRankMap = computeOddsRankMap(race.players);
 
   const vectors = race.players.map((p) => {
     const { style_nige, style_oikomi, style_ryo } = styleOneHot(p.style);
-    const raceScore = p.score != null ? p.score : FEATURE_DEFAULTS.race_score;
-    const avgRank = recentAvgRank(p.recentResults);
+    const rider = riderMap && window.KeirinDB ? riderMap.get(window.KeirinDB.buildRiderId(p.name)) : null;
+
+    const raceScore = p.score != null ? p.score : rider && rider.score != null ? rider.score : FEATURE_DEFAULTS.race_score;
+
+    // 直近5走の平均着順: riders学習データ(数値配列)を優先し、無ければ出走表のrecentResults文字列を使う
+    const riderAvgRank =
+      rider && rider.recentResults && rider.recentResults.length
+        ? rider.recentResults.filter((n) => typeof n === 'number').reduce((a, b) => a + b, 0) / rider.recentResults.length
+        : null;
+    const avgRank = riderAvgRank != null ? riderAvgRank : recentAvgRank(p.recentResults);
+
+    const moveRates = rider ? moveRatesFromHistory(rider.recentMoves) : null;
     const rankPosition = oddsRankMap.has(p.number) ? oddsRankMap.get(p.number) : MAX_RANK_POSITION;
 
     return [
@@ -99,9 +129,9 @@ function buildFeatureMatrix(race) {
       style_oikomi,
       style_ryo,
       avgRank != null ? avgRank : FEATURE_DEFAULTS.recent_avg_rank,
-      FEATURE_DEFAULTS.recent_nige_rate,
-      FEATURE_DEFAULTS.recent_makuri_rate,
-      FEATURE_DEFAULTS.recent_sashi_rate,
+      moveRates ? moveRates.nige : FEATURE_DEFAULTS.recent_nige_rate,
+      moveRates ? moveRates.makuri : FEATURE_DEFAULTS.recent_makuri_rate,
+      moveRates ? moveRates.sashi : FEATURE_DEFAULTS.recent_sashi_rate,
       rankPosition,
     ];
   });

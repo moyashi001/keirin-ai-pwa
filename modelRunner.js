@@ -9,6 +9,10 @@
  *
  * assets/keirin_model.onnx が読み込めない場合(未配置・読み込み失敗)は、
  * 同じ特徴量を使った軽量なルールベース推論に自動フォールバックする。
+ *
+ * 調子指数(riders学習データ由来)はONNXモデルの入力次元(9次元固定、変更すると
+ * 再学習なしには推論できなくなる)には含めず、推論後のAI推奨度(aiScore)への
+ * 補正として反映している。
  */
 
 let ortSession = null;
@@ -105,10 +109,11 @@ function softmax(logits) {
 /**
  * レース1件分の推論を実行し、各選手に winRate / placeRate / expectedValue / aiScore を付与する。
  * @param {object} race parseRaceCardHtml() の出力
+ * @param {Map<string,object>} [riderMap] db.getRiderMap()の結果。あれば選手ごとの学習データで特徴量を補強する。
  * @returns {Promise<object>} 推論結果を付与したレースオブジェクト
  */
-async function predictRace(race) {
-  const { vectors, players } = window.KeirinFeatureBuilder.buildFeatureMatrix(race);
+async function predictRace(race, riderMap) {
+  const { vectors, players } = window.KeirinFeatureBuilder.buildFeatureMatrix(race, riderMap);
   const session = await tryLoadOnnxModel();
 
   let winRates;
@@ -143,14 +148,25 @@ async function predictRace(race) {
     const odds = player.odds != null ? player.odds : null;
     const expectedValue = odds != null ? Number((winRate * odds).toFixed(3)) : null;
     const confidence = completeness[i];
-    const aiScore = Number(((expectedValue != null ? expectedValue : winRate * 2) * (0.5 + 0.5 * confidence)).toFixed(3));
+    let aiScore = (expectedValue != null ? expectedValue : winRate * 2) * (0.5 + 0.5 * confidence);
+
+    // 調子指数(S-2): ONNXモデルの入力次元は固定のため特徴量ベクトルには追加できないが、
+    // 推論後のAI推奨度には反映する。指数の目安中央値35を基準に±15%の範囲で補正する。
+    const rider = riderMap && window.KeirinDB ? riderMap.get(window.KeirinDB.buildRiderId(player.name)) : null;
+    const conditionIndex = rider && rider.conditionIndex != null ? rider.conditionIndex : null;
+    if (conditionIndex != null) {
+      const conditionBoost = 1 + Math.max(-0.15, Math.min(0.15, (conditionIndex - 35) / 200));
+      aiScore *= conditionBoost;
+    }
+
     return {
       ...player,
       winRate: Number(winRate.toFixed(4)),
       placeRate: Number(placeRate.toFixed(4)),
       expectedValue,
       confidence: Number(confidence.toFixed(2)),
-      aiScore,
+      aiScore: Number(aiScore.toFixed(3)),
+      conditionIndex,
     };
   });
 
@@ -168,10 +184,10 @@ async function predictRace(race) {
   };
 }
 
-async function predictRaces(races) {
+async function predictRaces(races, riderMap) {
   const results = [];
   for (const race of races) {
-    results.push(await predictRace(race));
+    results.push(await predictRace(race, riderMap));
   }
   return results;
 }

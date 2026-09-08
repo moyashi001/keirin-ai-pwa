@@ -185,6 +185,19 @@ function detectLines(fullText, players) {
   return fallbackLines;
 }
 
+/** ライン内での位置を数値化する(1=先頭, 2=番手, 3=3番手以降/単騎) */
+function computeLinePosition(playerNumber, lines) {
+  const line = (lines || []).find((l) => l.includes(playerNumber));
+  if (!line || line.length <= 1) return 3;
+  const pos = line.indexOf(playerNumber);
+  return Math.min(pos + 1, 3);
+}
+
+/** 選手配列に、確定したライン構成からのlinePosition(1〜3)を付与する */
+function attachLinePositions(players, lines) {
+  return players.map((p) => ({ ...p, linePosition: computeLinePosition(p.number, lines) }));
+}
+
 /** オッズ表(単勝オッズ等)を全文から車番→オッズのマップとして拾うフォールバック */
 function extractOddsMap(doc) {
   const map = {};
@@ -277,6 +290,7 @@ function parseRaceCardHtml(html, referenceDate = new Date()) {
   });
 
   const lines = detectLines(fullText, players);
+  players = attachLinePositions(players, lines);
 
   // バンク特性(周長・みなし直線)
   let bankNote = null;
@@ -450,13 +464,14 @@ function parseRaceCardsFromPage(html, referenceDate = new Date()) {
   let prevTable = null;
 
   for (const table of playerTables) {
-    const players = buildPlayersFromTable(table, fullText, oddsMap);
+    let players = buildPlayersFromTable(table, fullText, oddsMap);
     if (players.length === 0) {
       prevTable = table;
       continue;
     }
 
     const lines = detectLines(fullText, players);
+    players = attachLinePositions(players, lines);
 
     const sectionText = collectPrecedingSectionText(table, prevTable, doc);
     let raceNumber = detectRaceNumber(sectionText);
@@ -515,13 +530,15 @@ function parseResultsFromPage(html, referenceDate = new Date()) {
     );
     const order = [];
     for (const row of rows) {
-      const rankCell = row.find((c) => /^[1-9]着?$/.test(c));
-      const numCell = row.filter((c) => /^\d{1,2}$/.test(c) && Number(c) <= 9);
+      // 「着」の文字が付いた列だけを着順とみなす(出走表の車番セルは単なる数字なので誤検出しない)
+      const rankIdx = row.findIndex((c) => /^[1-9]着$/.test(c));
+      if (rankIdx === -1) continue;
+      const rank = parseInt(row[rankIdx], 10);
+      const numCell = row.filter((c, i) => i !== rankIdx && /^\d{1,2}$/.test(c) && Number(c) <= 9);
       const nameCell = row.find((c) => looksLikeName(c));
-      if (rankCell && nameCell && numCell.length > 0) {
-        const rank = parseInt(rankCell, 10);
-        const number = Number(numCell[numCell.length > 1 ? 1 : 0]);
-        if (rank >= 1 && rank <= 9) order.push({ number, name: nameCell, rank });
+      const moveCell = row.find((c, i) => i !== rankIdx && detectStyle(c));
+      if (nameCell && numCell.length > 0 && rank >= 1 && rank <= 9) {
+        order.push({ number: Number(numCell[0]), name: nameCell, rank, move: moveCell ? detectStyle(moveCell) : null });
       }
     }
     if (order.length === 0) continue;
@@ -572,15 +589,15 @@ function parseResultHtml(html, referenceDate = new Date()) {
       Array.from(tr.querySelectorAll('td,th')).map((c) => textOf(c))
     );
     for (const row of rows) {
-      const rankCell = row.find((c) => /^[1-9]着?$/.test(c));
-      const numCell = row.filter((c) => /^\d{1,2}$/.test(c) && Number(c) <= 9);
+      // 「着」の文字が付いた列だけを着順とみなす(出走表の車番セルは単なる数字なので誤検出しない)
+      const rankIdx = row.findIndex((c) => /^[1-9]着$/.test(c));
+      if (rankIdx === -1) continue;
+      const rank = parseInt(row[rankIdx], 10);
+      const numCell = row.filter((c, i) => i !== rankIdx && /^\d{1,2}$/.test(c) && Number(c) <= 9);
       const nameCell = row.find((c) => looksLikeName(c));
-      if (rankCell && nameCell && numCell.length > 0) {
-        const rank = parseInt(rankCell, 10);
-        const number = Number(numCell[numCell.length > 1 ? 1 : 0]);
-        if (rank >= 1 && rank <= 9) {
-          order.push({ number, name: nameCell, rank });
-        }
+      const moveCell = row.find((c, i) => i !== rankIdx && detectStyle(c));
+      if (nameCell && numCell.length > 0 && rank >= 1 && rank <= 9) {
+        order.push({ number: Number(numCell[0]), name: nameCell, rank, move: moveCell ? detectStyle(moveCell) : null });
       }
     }
     if (order.length >= 3) break;
