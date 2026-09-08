@@ -19,18 +19,18 @@
     </header>
 
     <main>
-      <!-- 本日のレース取得 -->
+      <!-- 開催日一覧ページから取得(本日の結果集計＋翌日の予想) -->
       <section id="view-upload" class="view active">
         <div class="panel">
-          <h2>本日のレースを取得</h2>
-          <p class="hint">競輪公式サイトの「開催日一覧ページ」のURLを1つ入力してください。そのページから本日の全レースURLを自動抽出して取得します。</p>
+          <h2>本日の結果＋翌日の予想を取得</h2>
+          <p class="hint">競輪公式サイトの「開催日一覧ページ」のURLを1つ入力してください。そのページから<b>本日の結果ページ</b>と<b>翌日の出走表ページ</b>を自動抽出し、本日分の回収率集計と翌日分のAI予想生成をまとめて行います。</p>
           <input type="url" id="index-url-input" class="url-input" placeholder="https://example.com/keirin/2026-09-08/" />
-          <button id="fetch-races-btn" class="primary-btn">本日のレースを取得する</button>
+          <button id="fetch-races-btn" class="primary-btn">取得する</button>
           <p id="upload-status" class="status-msg"></p>
         </div>
         <div class="panel">
-          <h2>（予備）HTMLファイルを直接アップロード</h2>
-          <p class="hint">サイト側の制限で自動取得できない場合は、出走表ページを保存したHTMLファイルをここから読み込めます。</p>
+          <h2>（予備）翌日の出走表HTMLを直接アップロード</h2>
+          <p class="hint">サイト側の制限で自動取得できない場合は、翌日の出走表ページを保存したHTMLファイルをここから読み込めます。</p>
           <label class="upload-box" for="race-card-input">
             <span class="upload-icon">⬆</span>
             <span>HTMLファイルを選択 / ドロップ</span>
@@ -55,14 +55,7 @@
       <!-- 回収率 -->
       <section id="view-results" class="view">
         <div class="panel">
-          <h2>結果HTMLをアップロード</h2>
-          <p class="hint">本日のレース終了後、着順ページを保存したHTMLをアップロードすると、おすすめレースの的中判定・回収率を自動計算します。</p>
-          <label class="upload-box" for="result-input">
-            <span class="upload-icon">⬆</span>
-            <span>結果HTMLを選択</span>
-            <input type="file" id="result-input" accept=".html,.htm,text/html" multiple hidden />
-          </label>
-          <p id="result-status" class="status-msg"></p>
+          <p class="hint">「予想」タブで開催日一覧ページのURLから取得すると、本日分の結果が自動集計されます。</p>
         </div>
         <div class="panel">
           <h2>回収率の推移</h2>

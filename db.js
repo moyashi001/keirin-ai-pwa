@@ -1,8 +1,10 @@
 /**
  * db.js
- * IndexedDBラッパー。当日のレース予測結果と日次回収率ログを永続化する。
- * レースは「当日分のみ」を保持する運用のため、新しい当日データ取得時は
- * clearRaces() で前回分を消してから保存する。
+ * IndexedDBラッパー。レース予測結果と日次回収率ログを永続化する。
+ *
+ * 運用上、DBには「当日の結果待ちレース(前回アクセス時に翌日予想として保存したもの)」と
+ * 「新しく取得した翌日予想レース」が一時的に同居し得る。当日結果の回収率計算が済んだら
+ * clearRacesByDate() でその日付のレースだけを削除し、無制限に溜まらないようにする。
  */
 
 const DB_NAME = 'keirin-ai-db';
@@ -65,13 +67,18 @@ async function getAllRaces() {
   });
 }
 
-/** 当日データを取得し直す際に、前日以前のレースを一括削除する */
-async function clearRaces() {
-  const store = await tx(STORE_RACES, 'readwrite');
+/** 指定した日付(YYYY-MM-DD)のレースだけを一括削除する(結果処理が済んだ分の掃除用) */
+async function clearRacesByDate(date) {
+  const db = await openDB();
   return new Promise((resolve, reject) => {
-    const req = store.clear();
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    const t = db.transaction(STORE_RACES, 'readwrite');
+    const store = t.objectStore(STORE_RACES);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      (req.result || []).filter((r) => r.date === date).forEach((r) => store.delete(r.raceKey));
+    };
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
   });
 }
 
@@ -125,7 +132,7 @@ if (typeof window !== 'undefined') {
     saveRace,
     saveRaces,
     getAllRaces,
-    clearRaces,
+    clearRacesByDate,
     getRace,
     deleteRace,
     saveDailyLog,

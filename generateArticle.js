@@ -1,6 +1,6 @@
 /**
  * generateArticle.js
- * note投稿用の予想記事(詳細版)を当日のレース推論結果から自動生成する。
+ * note投稿用の予想記事(詳細版)を翌日のレース推論結果から自動生成する。
  */
 
 const OVERVIEW_OPENERS = [
@@ -104,7 +104,7 @@ function generateRaceArticle(race, seed = 0) {
   return lines.join('\n');
 }
 
-/** 当日の全レースをまとめた記事を生成する */
+/** 翌日の全レースをまとめた記事を生成する */
 function generateSummaryArticle(races, seed = 0) {
   const date = races[0] ? races[0].date : '';
 
@@ -112,7 +112,7 @@ function generateSummaryArticle(races, seed = 0) {
   lines.push(`■ ${date} 競輪AI予想まとめ`);
   lines.push('');
   lines.push(
-    `本日は全${races.length}レースをAI分析。期待値1.0を超える「おすすめレース」は` +
+    `${date}は全${races.length}レースをAI分析。期待値1.0を超える「おすすめレース」は` +
       `${races.filter((r) => r.recommended).length}レースだった。`
   );
   lines.push('');

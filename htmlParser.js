@@ -1,9 +1,11 @@
 /**
  * htmlParser.js
- * 競輪公式サイトの「開催日一覧ページHTML」からその日の各レースURLを抽出し、
- * 「出走表HTML」「結果HTML」を構造化JSONに変換する(当日運用専用)。
+ * 競輪公式サイトの「開催日一覧ページHTML」から
+ *   A. 当日の結果ページURL
+ *   B. 翌日の出走表(開催)ページURL
+ * を自動抽出し、出走表HTML・結果HTMLを構造化JSONに変換する。
  * サイト側のマークアップ変更に強くするため、複数のフォールバック戦略を積み重ねている。
- *  1. ラベル/クラス名によるヒント検索
+ *  1. ラベル/クラス名/日付によるヒント検索
  *  2. テーブル構造からのヒューリスティック推定
  *  3. 全文テキストへの正規表現フォールバック
  */
@@ -311,8 +313,141 @@ function extractRaceUrlsFromIndexPage(html, baseUrl) {
   return urls;
 }
 
+/** 'YYYY-MM-DD' 文字列同士が同じ日かどうか(タイムゾーンに影響されない文字列比較) */
+function isSameDateLabel(a, b) {
+  return !!a && !!b && a === b;
+}
+
 /**
- * 結果HTML(着順表)を構造化JSONへ変換する。
+ * 開催日一覧ページのHTMLから「当日の結果ページURL」と「翌日の出走表(開催)ページURL」を
+ * それぞれ1つずつ抽出する。サイト構造が不明でも壊れにくいよう、
+ * リンクの周辺テキストから日付を推定しつつ、キーワードだけのゆるい判定にもフォールバックする。
+ * @param {string} html 開催日一覧ページのHTML
+ * @param {string} baseUrl 相対URLを絶対URLへ解決するための基準URL
+ * @param {Date} [referenceDate] テスト用に「今日」を差し替え可能
+ * @returns {{ resultUrl: string|null, nextDayUrl: string|null }}
+ */
+function extractResultAndNextDayUrls(html, baseUrl, referenceDate = new Date()) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const anchors = Array.from(doc.querySelectorAll('a[href]'));
+
+  const today = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  const todayLabel = formatDate(today);
+  const tomorrowLabel = formatDate(tomorrow);
+
+  let resultUrl = null;
+  let resultUrlDated = false;
+  let nextDayUrl = null;
+  let nextDayUrlDated = false;
+
+  const resolve = (href) => {
+    try {
+      return new URL(href, baseUrl).href;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  for (const a of anchors) {
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+    const text = normalizeText(a.textContent);
+    const context = normalizeText((a.closest('li,tr,div,td,section,article') || a).textContent).slice(0, 80);
+
+    const isResultLike = /結果|着順|払戻/.test(text) || /result|chakujun|haraimodoshi/i.test(href);
+    const isCardLike = /出走表|番組|出走/.test(text) || /race|card|degree|shusso|syusso|hd=|rno=/i.test(href);
+    if (!isResultLike && !isCardLike) continue;
+
+    // 周辺テキストに日付らしき記述があれば、それが今日/明日かを判定する
+    const contextDateLabel = /本日|今日/.test(context) ? todayLabel : /明日|翌日/.test(context) ? tomorrowLabel : detectDateLabel(context, referenceDate);
+    const absolute = resolve(href);
+    if (!absolute) continue;
+
+    if (isResultLike) {
+      const matchesToday = isSameDateLabel(contextDateLabel, todayLabel);
+      if (!resultUrl || (matchesToday && !resultUrlDated)) {
+        resultUrl = absolute;
+        resultUrlDated = matchesToday;
+      }
+    }
+    if (isCardLike) {
+      const matchesTomorrow = isSameDateLabel(contextDateLabel, tomorrowLabel);
+      if (!nextDayUrl || (matchesTomorrow && !nextDayUrlDated)) {
+        nextDayUrl = absolute;
+        nextDayUrlDated = matchesTomorrow;
+      }
+    }
+  }
+
+  return { resultUrl, nextDayUrl };
+}
+
+/**
+ * 結果ページ(1ページに複数レース分の着順表が並んでいることを想定)を
+ * レース単位の結果配列に変換する。テーブルごとに1レース分の着順とみなし、
+ * レース番号はテーブル直前の見出しテキストから推定する(推定できない場合は出現順の通し番号)。
+ * @returns {Array<{raceKey:string, date:string, venue:string, raceNumber:number, order:object[]}>}
+ */
+function parseResultsFromPage(html, referenceDate = new Date()) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const fullText = normalizeText(doc.body ? doc.body.textContent : html);
+  const dateLabel = detectDateLabel(fullText, referenceDate);
+  const venue = detectVenue(fullText);
+
+  const tables = Array.from(doc.querySelectorAll('table'));
+  const results = [];
+  let fallbackRaceNo = 1;
+  const usedRaceNumbers = new Set();
+
+  for (const table of tables) {
+    const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
+      Array.from(tr.querySelectorAll('td,th')).map((c) => textOf(c))
+    );
+    const order = [];
+    for (const row of rows) {
+      const rankCell = row.find((c) => /^[1-9]着?$/.test(c));
+      const numCell = row.filter((c) => /^\d{1,2}$/.test(c) && Number(c) <= 9);
+      const nameCell = row.find((c) => looksLikeName(c));
+      if (rankCell && nameCell && numCell.length > 0) {
+        const rank = parseInt(rankCell, 10);
+        const number = Number(numCell[numCell.length > 1 ? 1 : 0]);
+        if (rank >= 1 && rank <= 9) order.push({ number, name: nameCell, rank });
+      }
+    }
+    if (order.length === 0) continue;
+    order.sort((a, b) => a.rank - b.rank);
+
+    // レース番号をテーブル直前の見出しやcaptionから推定する
+    const precedingText = normalizeText(
+      (table.caption ? table.caption.textContent : '') +
+        ' ' +
+        (table.previousElementSibling ? table.previousElementSibling.textContent : '')
+    );
+    let raceNumber = detectRaceNumber(precedingText);
+    while (raceNumber && usedRaceNumbers.has(raceNumber)) raceNumber = null; // 誤検出で重複した場合はフォールバック
+    if (!raceNumber) {
+      while (usedRaceNumbers.has(fallbackRaceNo)) fallbackRaceNo++;
+      raceNumber = fallbackRaceNo;
+    }
+    usedRaceNumbers.add(raceNumber);
+
+    results.push({
+      raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+      date: dateLabel,
+      venue,
+      raceNumber,
+      order,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+
+  return results;
+}
+
+/**
+ * 結果HTML(着順表、1レース分)を構造化JSONへ変換する。
  * @returns {{raceKey:string, order: {number:number, name:string, rank:number}[]}}
  */
 function parseResultHtml(html, referenceDate = new Date()) {
@@ -365,5 +500,12 @@ function parseResultHtml(html, referenceDate = new Date()) {
 }
 
 if (typeof window !== 'undefined') {
-  window.KeirinParser = { parseRaceCardHtml, parseResultHtml, extractRaceUrlsFromIndexPage, normalizeText };
+  window.KeirinParser = {
+    parseRaceCardHtml,
+    parseResultHtml,
+    parseResultsFromPage,
+    extractRaceUrlsFromIndexPage,
+    extractResultAndNextDayUrls,
+    normalizeText,
+  };
 }
