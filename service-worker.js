@@ -9,7 +9,7 @@
  * 配信され続けてしまう。
  */
 
-const VERSION = 'v25';
+const VERSION = 'v26';
 const CACHE_NAME = `keirin-ai-cache-${VERSION}`;
 
 const CORE_ASSETS = [

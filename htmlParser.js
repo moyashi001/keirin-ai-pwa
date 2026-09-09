@@ -649,20 +649,20 @@ function buildPlayersFromTable(table, fullText, oddsMap) {
 function parseRaceCardsFromPage(html, referenceDate = new Date()) {
   // KEIRIN.JPの投票選択ページ(mainOzzDataを含む)は、選手情報がテーブルではなく
   // JS変数に埋め込まれているため、まずこちらを優先的に試す。
+  // このページ種別と判定できた場合、レースが0件でも以降の汎用DOM走査フォールバックには
+  // 進ませない。投票選択ページには選手情報を持つ<table>が無いため、フォールバックに
+  // 進むとdetectVenue()の緩い正規表現がお知らせ欄の文言(「詳しくは競輪トピックス」等)を
+  // 会場名と誤検出し、さらに全文正規表現の最終フォールバックが無関係な文字列を選手として
+  // 誤検出してしまう(実際に発生した不具合: 予想一覧の一部レースが「詳しくは競輪」表示になった)。
   const ozzData = extractMainOzzData(html);
-  if (ozzData) {
-    const ozzRaces = buildRacesFromOzzData(ozzData, referenceDate);
-    if (ozzRaces.length > 0) return ozzRaces;
-  }
+  if (ozzData) return buildRacesFromOzzData(ozzData, referenceDate);
 
-  // KEIRIN.JPの「開催情報」ページ(jsonData['SJ0305']を含む)も同様にJS変数優先で解析する。
-  // 結果一覧が同じページに同居しているため、通常のテーブル走査だと誤って
-  // 結果テーブルまで出走表として拾ってしまう。
+  // KEIRIN.JPの「開催情報」ページ(jsonData['SJ0305']を含む)も同様にJS変数優先で解析し、
+  // 判定できた場合は同じ理由で汎用フォールバックに進ませない。
   const sj0305Data = extractSJ0305Data(html);
   if (sj0305Data) {
     const fullTextForSj = normalizeText(new DOMParser().parseFromString(html, 'text/html').body?.textContent || html);
-    const sjRaces = buildRaceCardsFromSJ0305Data(sj0305Data, fullTextForSj, referenceDate);
-    if (sjRaces.length > 0) return sjRaces;
+    return buildRaceCardsFromSJ0305Data(sj0305Data, fullTextForSj, referenceDate);
   }
 
   const doc = new DOMParser().parseFromString(html, 'text/html');
