@@ -211,16 +211,24 @@ function judgeWideBet(bet, result) {
   let payout = 0;
   if (hit) {
     // 結果ページに実際のワイド払戻し額があればそれを優先し、無ければ推定オッズから概算する
-    // (KEIRIN.JPの結果ページは通常2車単・3連単のみ掲載でワイドが無いことが多い)
-    const actualPayout = result.payouts && result.payouts.wide;
+    // (DMM競輪はワイド3組み合わせすべての実配当を掲載しているためwideCombosを優先的に見る。
+    // KEIRIN.JP等はワイドの実配当が無いことが多く、その場合は推定オッズで概算する)
     const comboKey = [...bet.combo].sort((a, b) => a - b).join('-');
-    if (actualPayout) {
-      const actualCombo = String(actualPayout.combo)
+    const normalizeCombo = (combo) =>
+      String(combo)
         .split(/[-‐=]/)
         .map(Number)
         .sort((a, b) => a - b)
         .join('-');
-      if (actualCombo === comboKey) payout = actualPayout.amount;
+
+    const wideCombos = result.payouts && result.payouts.wideCombos;
+    if (Array.isArray(wideCombos)) {
+      const match = wideCombos.find((w) => normalizeCombo(w.combo) === comboKey);
+      if (match) payout = match.amount;
+    }
+    if (!payout) {
+      const actualPayout = result.payouts && result.payouts.wide;
+      if (actualPayout && normalizeCombo(actualPayout.combo) === comboKey) payout = actualPayout.amount;
     }
     if (!payout) payout = bet.odds != null ? Math.round(bet.odds * bet.stake) : bet.stake;
   }

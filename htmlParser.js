@@ -89,8 +89,26 @@ function detectVenue(fullText) {
   let m = fullText.match(/"joName"\s*:\s*"([^"]+)"/);
   if (m) return m[1].replace(/競輪場?$/, '');
 
-  m = fullText.match(/([一-龥々ぁ-んァ-ヶー]{2,6}競輪)/);
-  return m ? m[1].replace('競輪', '') : '不明会場';
+  const match = fullText.match(/([一-龥々ぁ-んァ-ヶー]{2,6})競輪/);
+  return match ? match[1] : '不明会場';
+}
+
+/**
+ * DOM要素単位で「◯◯競輪」だけを丸ごとテキストに持つ要素を探して会場名を返す(無ければnull)。
+ * detectVenue()のようにページ全文を1本の文字列に連結してから検索すると、
+ * ナビゲーションメニューの項目同士が連結されて「レース結果一覧競輪場一覧」のように
+ * 実在しない会場名らしき文字列が誤って先に見つかってしまうことがある(DMM競輪の
+ * 結果ページ等で実際に発生)。要素単位で完全一致するものだけを対象にすればこれを避けられる。
+ */
+function detectVenueFromDom(doc) {
+  const els = Array.from(doc.querySelectorAll('*'));
+  for (const el of els) {
+    if (el.children.length > 0) continue;
+    const text = normalizeText(el.textContent);
+    const m = text.match(/^([一-龥々ぁ-んァ-ヶー]{2,6})競輪$/);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 function detectRaceNumber(fullText) {
@@ -860,7 +878,103 @@ function parseGambooRefundListPage(html, referenceDate = new Date()) {
   return results;
 }
 
+/**
+ * DMM競輪(keirin.dmm.com)の会場別レース結果ページ専用の抽出ロジック。
+ * 1ページに1競輪場の全レース分の着順(選手名つき)と払戻金がまとまっており、
+ * ワイドについても実際に発生した3組み合わせすべての配当が data-testid 付きの
+ * 構造化されたテーブルとして掲載されている(他サイトはワイドの実配当が無い)。
+ */
+function looksLikeDmmKeirinResultPage(html) {
+  return /data-testid="refundAmount"/.test(html) && /data-setnum=/.test(html);
+}
+
+/** DMM競輪の券種名から payouts のキーを決める(ワイドはnull、複数組み合わせは呼び出し側でまとめる) */
+function dmmBetTypeKey(betType) {
+  if (betType === '2車複') return 'quinella';
+  if (betType === '2車単') return 'exacta';
+  if (betType === '3連複') return 'trio';
+  if (betType === '3連単') return 'trifecta';
+  return null;
+}
+
+function parseDmmKeirinResultPage(html, referenceDate = new Date()) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const fullText = normalizeText(doc.body ? doc.body.textContent : html);
+  const dateLabel = detectDateLabel(fullText, referenceDate);
+  const venue = detectVenueFromDom(doc) || detectVenue(fullText);
+
+  const results = [];
+  const raceLinks = Array.from(doc.querySelectorAll('a[href]')).filter((a) => /^\d{1,2}R\s/.test(normalizeText(a.textContent)));
+
+  for (const link of raceLinks) {
+    const hrefMatch = (link.getAttribute('href') || '').match(/\/(\d{1,2})$/);
+    const textMatch = normalizeText(link.textContent).match(/^(\d{1,2})R/);
+    const raceNumber = hrefMatch ? Number(hrefMatch[1]) : textMatch ? Number(textMatch[1]) : null;
+    if (!raceNumber) continue;
+
+    const block = link.parentElement && link.parentElement.parentElement;
+    if (!block) continue;
+    const tables = Array.from(block.querySelectorAll('table'));
+    if (tables.length < 2) continue;
+
+    // 着順(1着/2着/3着): 最初のテーブルの各セルに「車番+選手名」が入っている
+    const order = Array.from(tables[0].querySelectorAll('tbody td'))
+      .map((td, i) => {
+        const numEl = td.querySelector('span');
+        const nameEl = td.querySelector('p');
+        const number = numEl ? parseInt(normalizeText(numEl.textContent), 10) : NaN;
+        if (isNaN(number)) return null;
+        return {
+          number,
+          name: nameEl ? normalizeText(nameEl.textContent).replace(/\s+/g, '') : null,
+          rank: i + 1,
+          move: null,
+        };
+      })
+      .filter(Boolean);
+    if (order.length === 0) continue;
+
+    // 払戻(ワイドは3組み合わせすべてを実配当つきで拾う)
+    const payouts = {};
+    const wideCombos = [];
+    let currentBetType = null;
+    for (const row of tables[1].querySelectorAll('tr')) {
+      const th = row.querySelector('th[data-testid="betType"]');
+      if (th) currentBetType = normalizeText(th.textContent);
+      const setnumEl = row.querySelector('[data-setnum]');
+      const amountEl = row.querySelector('[data-testid="refundAmount"]');
+      if (!setnumEl || !amountEl) continue;
+      const combo = (setnumEl.getAttribute('data-setnum') || '').replace(/[=\-]/g, '-');
+      const amount = parseYen(amountEl.textContent);
+      if (currentBetType === 'ワイド') {
+        wideCombos.push({ combo, amount });
+      } else {
+        const key = dmmBetTypeKey(currentBetType);
+        if (key) payouts[key] = { combo, amount };
+      }
+    }
+    if (wideCombos.length > 0) payouts.wideCombos = wideCombos;
+
+    results.push({
+      raceKey: `${dateLabel}_${venue}_${raceNumber}`,
+      date: dateLabel,
+      venue,
+      raceNumber,
+      order,
+      payouts,
+      parsedAt: new Date().toISOString(),
+    });
+  }
+  return results;
+}
+
 function parseResultsFromPage(html, referenceDate = new Date()) {
+  // DMM競輪の会場別結果ページ(ワイドの実配当つき)は最優先で試す。
+  if (looksLikeDmmKeirinResultPage(html)) {
+    const dmmResults = parseDmmKeirinResultPage(html, referenceDate);
+    if (dmmResults.length > 0) return dmmResults;
+  }
+
   // GambooBETの「払戻金一覧」ページ(全競輪場まとめて掲載)は最優先で試す。
   if (looksLikeGambooRefundListPage(html)) {
     const gambooResults = parseGambooRefundListPage(html, referenceDate);
