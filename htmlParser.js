@@ -1132,11 +1132,33 @@ function detectPageType(html, referenceDate = new Date()) {
   return 'unknown';
 }
 
+/**
+ * 「これは出走表ページのようだ」と確信を持って言えるかどうかを判定する。
+ * parseRaceCardsFromPage()の最終フォールバック(全文正規表現走査)は「数字の直後に
+ * 2〜8文字の日本語」というだけの緩い条件のため、日付表記(例:「9月8日全レース結果」)
+ * など出走表と無関係なページでも選手情報らしきものを誤検出してしまうことがある
+ * (実際にDMM競輪の結果一覧ページで発生)。結果タブへの誤判定案内を出す前段の
+ * チェックとしては、埋め込みJSON(mainOzzData/SJ0305)由来の確度の高い検出のみを見る。
+ */
+function hasStructuredRaceCardSource(html, referenceDate = new Date()) {
+  const ozzData = extractMainOzzData(html);
+  if (ozzData && buildRacesFromOzzData(ozzData, referenceDate).length > 0) return true;
+
+  const sj0305Data = extractSJ0305Data(html);
+  if (sj0305Data) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const fullText = normalizeText(doc.body ? doc.body.textContent : html);
+    if (buildRaceCardsFromSJ0305Data(sj0305Data, fullText, referenceDate).length > 0) return true;
+  }
+  return false;
+}
+
 if (typeof window !== 'undefined') {
   window.KeirinParser = {
     parseRaceCardHtml,
     parseRaceCardsFromPage,
     parseResultHtml,
+    hasStructuredRaceCardSource,
     detectPageType,
     parseResultsFromPage,
     normalizeText,

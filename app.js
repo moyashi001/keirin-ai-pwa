@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v24';
+  const APP_VERSION = 'v25';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -304,9 +304,11 @@
   async function handleResult(html) {
     const results = window.KeirinParser.parseResultsFromPage(html);
     if (results.length === 0) {
-      // 結果として抽出できなかった場合、出走表としてなら読み取れるか調べて案内する
-      const races = window.KeirinParser.parseRaceCardsFromPage(html);
-      if (races.some((r) => r.players.length > 0)) {
+      // 結果として抽出できなかった場合、出走表(埋め込みJSON由来の確度が高いもののみ)
+      // としてなら読み取れるか調べて案内する。出走表側の最終フォールバック(全文正規表現)は
+      // 「日付表記」等を選手情報と誤検出しやすく、そのまま使うと無関係なページでも
+      // 「出走表のようです」と誤案内してしまうため、ここでは使わない。
+      if (window.KeirinParser.hasStructuredRaceCardSource(html)) {
         setResultStatus('出走表ページのHTMLのようです。出走表は「予想」タブに貼り付けてください。', true);
       } else {
         setResultStatus('着順情報を検出できませんでした。貼り付けたHTMLの内容をご確認ください。', true);
