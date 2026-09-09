@@ -539,6 +539,22 @@ main {
 }
 .log-stats .rate.positive span { color: var(--neon-lime); }
 .log-stats .rate.negative span { color: #ff5470; }
+.recovery-detail {
+  display: flex;
+  gap: 16px;
+  padding: 10px 2px 0;
+}
+.recovery-detail label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.recovery-detail span {
+  font-size: 15px;
+  font-weight: 700;
+}
+.recovery-detail .rate.positive span { color: var(--neon-lime); }
+.recovery-detail .rate.negative span { color: #ff5470; }
 .log-detail {
   margin-top: 6px;
   font-size: 11px;

@@ -3,7 +3,7 @@
  * 外部ライブラリなしでCanvasに簡易折れ線グラフ(日次回収率の推移)を描画する。
  */
 
-function drawRecoveryChart(canvas, logs) {
+function drawRecoveryChart(canvas, logs, selectedDate = null) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const cssWidth = canvas.clientWidth || 320;
@@ -55,14 +55,20 @@ function drawRecoveryChart(canvas, logs) {
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // 点
-  ctx.fillStyle = '#ff00e6';
+  // 点(選択中の日付は大きめのシアン丸で強調表示する)
   logs.forEach((log, i) => {
     const x = padding.left + (logs.length === 1 ? w / 2 : (w * i) / (logs.length - 1));
     const y = padding.top + h - ((log.recoveryRate || 0) / maxRate) * h;
+    const isSelected = selectedDate && log.date === selectedDate;
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = isSelected ? '#00fff2' : '#ff00e6';
+    ctx.arc(x, y, isSelected ? 6 : 3, 0, Math.PI * 2);
     ctx.fill();
+    if (isSelected) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   });
 
   // x軸ラベル(最初・最後のみ)

@@ -18,7 +18,7 @@
 (function () {
   // TOP画面に表示するバージョン表記。service-worker.js の VERSION を更新した際は
   // こちらも合わせて更新すること(キャッシュが正しく更新されたかの目視確認に使う)。
-  const APP_VERSION = 'v22';
+  const APP_VERSION = 'v23';
 
   const state = {
     races: [], // DB内の全レース(決着済みも含めて保持し、日付フィルタで履歴表示できるようにする)
@@ -27,6 +27,7 @@
     raceListScrollY: 0, // レース詳細から「一覧へ戻る」で復元するスクロール位置
     detailRaceKeys: [], // レース詳細の前後移動用: 現在の絞り込み条件でのraceKey配列
     detailIndex: -1, // 上記配列内での現在位置
+    selectedRecoveryDate: null, // 回収率タブで選択中の日付(nullなら最新日を自動表示)
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -360,6 +361,38 @@
     `;
   }
 
+  /** 回収率タブの「対象日」セレクトを日次ログに合わせて再構築する(未選択/無効な日付なら最新日を選ぶ) */
+  function renderRecoveryDateFilter(logs) {
+    const select = $('#recovery-date-select');
+    if (!select) return;
+    const dates = logs.map((l) => l.date); // getAllDailyLogsは日付昇順
+    if (!state.selectedRecoveryDate || !dates.includes(state.selectedRecoveryDate)) {
+      state.selectedRecoveryDate = dates.length ? dates[dates.length - 1] : null;
+    }
+    select.innerHTML = dates
+      .slice()
+      .reverse()
+      .map((d) => `<option value="${d}"${d === state.selectedRecoveryDate ? ' selected' : ''}>${d}</option>`)
+      .join('');
+    select.parentElement.hidden = dates.length === 0;
+  }
+
+  /** 選択中の日付の投資額・回収額・回収率を表示する */
+  function renderRecoveryDetail(logs) {
+    const container = $('#recovery-date-detail');
+    if (!container) return;
+    const log = logs.find((l) => l.date === state.selectedRecoveryDate);
+    if (!log) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = `
+      <div><label>投資額</label><span>${log.invested}円</span></div>
+      <div><label>回収額</label><span>${log.returned}円</span></div>
+      <div class="rate ${log.recoveryRate >= 100 ? 'positive' : 'negative'}"><label>回収率</label><span>${log.recoveryRate ?? '-'}%</span></div>
+    `;
+  }
+
   async function renderResultsView() {
     const logs = await window.KeirinDB.getAllDailyLogs();
     const container = $('#log-list');
@@ -384,8 +417,10 @@
         )
         .join('');
     }
+    renderRecoveryDateFilter(logs);
+    renderRecoveryDetail(logs);
     const canvas = $('#recovery-chart');
-    if (canvas) window.KeirinChart.drawRecoveryChart(canvas, logs);
+    if (canvas) window.KeirinChart.drawRecoveryChart(canvas, logs, state.selectedRecoveryDate);
   }
 
   function renderArticleView() {
@@ -460,6 +495,16 @@
       venueFilter.addEventListener('change', (e) => {
         state.selectedVenue = e.target.value;
         renderRacesView();
+      });
+    }
+    const recoveryDateSelect = $('#recovery-date-select');
+    if (recoveryDateSelect) {
+      recoveryDateSelect.addEventListener('change', async (e) => {
+        state.selectedRecoveryDate = e.target.value;
+        const logs = await window.KeirinDB.getAllDailyLogs();
+        renderRecoveryDetail(logs);
+        const canvas = $('#recovery-chart');
+        if (canvas) window.KeirinChart.drawRecoveryChart(canvas, logs, state.selectedRecoveryDate);
       });
     }
   }
